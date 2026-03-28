@@ -27,7 +27,8 @@ app.get('/', (req, res) => {
     status: 'ok',
     service: 'Sommelier World API',
     version: '1.0.0',
-    groq: GROQ_API_KEY ? '✅ configurata' : '❌ mancante'
+    groq: GROQ_API_KEY ? 'ok' : 'mancante',
+   key_start: GROQ_API_KEY ? GROQ_API_KEY.substring(0,6) : 'none'
   });
 });
 
