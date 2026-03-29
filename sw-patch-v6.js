@@ -77,24 +77,38 @@ REGOLE:
      Tu usi Railway + fallback Groq con la tua key.
   ═══════════════════════════════════════════════════════ */
   async function ask(userMsg) {
+    const userMsg_ = userMsg;
     addHist('user', userMsg);
     const messages = [{ role: 'system', content: SYS }, ...hist.slice(0, -1), { role: 'user', content: userMsg }];
 
-    // A) Railway (funziona per tutti, usa GROQ_API_KEY del server)
+    // A) Railway via /api/groq (endpoint esistente nel server)
     try {
       await wakeServer();
-      const r = await fetch(SERVER + '/api/sommelier-chat', {
+
+      // Costruisci il contesto dalla history per passarlo come userMsg
+      const histCtx = hist.slice(0, -1).map(m =>
+        (m.role === 'user' ? 'Utente: ' : 'Sommelier: ') + m.content
+      ).join('\n');
+      const userMsg = histCtx
+        ? histCtx + '\n\nUtente: ' + userMsg_
+        : userMsg_;
+
+      const r = await fetch(SERVER + '/api/groq', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages }),
+        body: JSON.stringify({
+          system: SYS,
+          userMsg: userMsg,
+          maxTokens: 1800,
+        }),
         signal: AbortSignal.timeout(30000),
       });
       if (r.ok) {
         const d = await r.json();
-        const reply = d.content || d.reply || '';
+        const reply = d.text || d.content || d.reply || '';
         if (reply) { addHist('assistant', reply); return reply; }
       }
-    } catch (e) { console.warn('[SW-v6] Railway:', e.message); }
+    } catch (e) { console.warn('[SW-v6] Railway /api/groq:', e.message); }
 
     // B) Groq diretto (fallback con tua key personale)
     const key = localStorage.getItem('groqApiKey') || localStorage.getItem('groq_api_key') || '';
@@ -196,20 +210,23 @@ REGOLE:
       if (c && Date.now() - c.ts < EV_TTL) return c.data;
     } catch {}
 
+    // Usa /api/news (già nel server) poi trasforma in formato eventi
     try {
       await wakeServer();
-      const r = await fetch(SERVER + '/api/sommelier-chat', {
+      // Prima prova con /api/groq per generare eventi
+      const r = await fetch(SERVER + '/api/groq', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [
-          { role:'system', content:'Rispondi SOLO con un JSON array valido, senza markdown, senza testo aggiuntivo.' },
-          { role:'user', content:'Crea 6 eventi realistici del vino in Europa Aprile-Maggio 2026. Campi: titolo, luogo, data, tipo (Degustazione/Fiera/Masterclass/Festival), e (emoji), desc (max 80 chars). Solo JSON array.' },
-        ]}),
+        body: JSON.stringify({
+          system: 'Rispondi SOLO con un JSON array valido. Nessun markdown, nessun testo fuori dal JSON.',
+          userMsg: 'Crea 6 eventi realistici del mondo del vino in Europa per Aprile-Maggio 2026. Per ogni evento: titolo, luogo, data (es "Sab 4 Apr 2026"), tipo (Degustazione/Fiera/Masterclass/Festival), e (una emoji), desc (max 80 caratteri). Formato: JSON array.',
+          maxTokens: 900,
+        }),
         signal: AbortSignal.timeout(18000),
       });
       if (r.ok) {
         const d = await r.json();
-        const txt = (d.content || d.reply || '').replace(/```json|```/g,'').trim();
+        const txt = (d.text || d.content || '').replace(/```json|```/g,'').trim();
         const ev = JSON.parse(txt);
         if (Array.isArray(ev) && ev.length > 0) {
           localStorage.setItem(EV_KEY, JSON.stringify({ ts: Date.now(), data: ev }));
@@ -588,6 +605,9 @@ REGOLE:
       injectHero(); injectGallery(); injectTerroirBg();
       injectFABFavs(); injectFABWiz(); buildWizard(); buildFavPanel();
       initEvents();
+      fixLogoClick();
+      fixMobileNav();
+      hookQuestionMarks();
       if(++n<15) setTimeout(run,400);
       else console.log('[SW-v6] Init completato ✓');
     };
@@ -595,6 +615,305 @@ REGOLE:
     document.readyState==='loading'
       ? document.addEventListener('DOMContentLoaded',run)
       : run();
+  }
+
+
+  /* ═══════════════════════════════════════════════════════
+     FIX: Logo click → Home
+  ═══════════════════════════════════════════════════════ */
+  function fixLogoClick() {
+    // Cerca logo / brand name nella navbar
+    const logo = document.querySelector(
+      '.logo, .brand, .navbar-brand, [class*="logo"], [class*="brand"], ' +
+      'header .title, nav .title, .site-title, .app-name'
+    ) || Array.from(document.querySelectorAll('*')).find(el =>
+      el.children.length < 4 &&
+      /sommelier\s*world/i.test(el.textContent) &&
+      el.offsetHeight < 80
+    );
+
+    if (!logo || logo.dataset.swLogo) return;
+    logo.dataset.swLogo = '1';
+    logo.style.cursor = 'pointer';
+    logo.title = 'Torna alla Home';
+
+    logo.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Metodo 1: click sul tab Home
+      const homeTab = Array.from(document.querySelectorAll('a, button, [data-tab], [onclick]'))
+        .find(el => /^\s*(🏠\s*)?home\s*$/i.test(el.textContent.trim()));
+      if (homeTab) { homeTab.click(); return; }
+
+      // Metodo 2: mostra la sezione #home direttamente
+      const homeSection = document.querySelector('#home, [data-tab="home"], .home-section');
+      if (homeSection) {
+        document.querySelectorAll('section, [data-tab]').forEach(s => s.style.display = 'none');
+        homeSection.style.display = '';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+
+      // Metodo 3: reload sulla root
+      window.location.href = window.location.origin;
+    });
+
+    console.log('[SW-v6] Logo → Home ✓');
+  }
+
+  /* ═══════════════════════════════════════════════════════
+     FIX: Navbar mobile — tutti i tab visibili ed eleganti
+  ═══════════════════════════════════════════════════════ */
+  function fixMobileNav() {
+    const nav = document.querySelector('nav, .nav, .navbar, .tab-bar, [class*="nav-"], [class*="tabs"]');
+    if (!nav || nav.dataset.swNav) return;
+    nav.dataset.swNav = '1';
+
+    // Inietta stile navbar migliorata
+    const style = document.createElement('style');
+    style.id = 'sw-nav-style';
+    style.textContent = `
+      /* ── Navbar container ── */
+      nav, .nav, .navbar, .tab-bar,
+      [class*="nav-bar"], [class*="tab-bar"] {
+        display: flex !important;
+        flex-direction: row !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        -webkit-overflow-scrolling: touch !important;
+        scrollbar-width: none !important;
+        -ms-overflow-style: none !important;
+        white-space: nowrap !important;
+        gap: 0 !important;
+        padding: 0 !important;
+        background: rgba(10,5,2,0.97) !important;
+        border-bottom: 1px solid rgba(212,168,83,0.2) !important;
+        position: sticky !important;
+        top: 0 !important;
+        z-index: 9990 !important;
+        backdrop-filter: blur(10px) !important;
+      }
+
+      /* Nascondi scrollbar ma mantieni funzionalità */
+      nav::-webkit-scrollbar,
+      .nav::-webkit-scrollbar,
+      .navbar::-webkit-scrollbar,
+      [class*="tab-bar"]::-webkit-scrollbar {
+        display: none !important;
+      }
+
+      /* ── Ogni tab / voce di navigazione ── */
+      nav a, nav button, nav .tab, nav [data-tab],
+      .nav a, .nav button, .nav .tab,
+      .navbar a, .navbar button,
+      [class*="tab-bar"] a, [class*="tab-bar"] button,
+      [class*="tab-bar"] [class*="tab"] {
+        display: inline-flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        flex-shrink: 0 !important;
+        min-width: 64px !important;
+        padding: 8px 10px !important;
+        font-family: Georgia, serif !important;
+        font-size: 9px !important;
+        letter-spacing: 1px !important;
+        text-transform: uppercase !important;
+        color: rgba(200,185,160,0.6) !important;
+        text-decoration: none !important;
+        border: none !important;
+        background: transparent !important;
+        border-bottom: 2px solid transparent !important;
+        transition: color 0.2s, border-color 0.2s !important;
+        cursor: pointer !important;
+        line-height: 1.2 !important;
+        gap: 4px !important;
+      }
+
+      /* Emoji/icona dentro il tab — più grande */
+      nav a .icon, nav button .icon,
+      nav a img, nav button img {
+        font-size: 18px !important;
+        line-height: 1 !important;
+      }
+
+      /* Tab attivo */
+      nav a.active, nav button.active,
+      nav a[class*="active"], nav button[class*="active"],
+      nav a[aria-selected="true"], nav [data-active="true"],
+      .nav a.active, .navbar a.active {
+        color: #d4a853 !important;
+        border-bottom-color: #d4a853 !important;
+      }
+
+      /* Hover */
+      nav a:hover, nav button:hover,
+      .nav a:hover, .navbar a:hover {
+        color: rgba(212,168,83,0.85) !important;
+        background: rgba(212,168,83,0.06) !important;
+      }
+
+      /* ── Brand / Logo nella navbar ── */
+      nav .logo, nav .brand, nav [class*="logo"], nav [class*="brand"],
+      .navbar .logo, .navbar .brand {
+        flex-shrink: 0 !important;
+        padding: 8px 14px !important;
+        font-family: Georgia, serif !important;
+        font-size: 11px !important;
+        letter-spacing: 3px !important;
+        text-transform: uppercase !important;
+        color: #d4a853 !important;
+        border-right: 1px solid rgba(212,168,83,0.15) !important;
+        margin-right: 4px !important;
+        min-width: unset !important;
+        white-space: nowrap !important;
+      }
+
+      /* ── Indicatore "scorri" su mobile ── */
+      @media (max-width: 600px) {
+        nav::after, .navbar::after, [class*="tab-bar"]::after {
+          content: '' !important;
+          position: sticky !important;
+          right: 0 !important;
+          top: 0 !important;
+          width: 24px !important;
+          height: 100% !important;
+          flex-shrink: 0 !important;
+          background: linear-gradient(to right, transparent, rgba(10,5,2,0.9)) !important;
+          pointer-events: none !important;
+        }
+      }
+    `;
+
+    // Rimuovi stile precedente se esiste
+    document.querySelector('#sw-nav-style')?.remove();
+    document.head.appendChild(style);
+
+    console.log('[SW-v6] Mobile nav fix ✓');
+  }
+
+
+  /* ═══════════════════════════════════════════════════════
+     FIX: Tooltip ? — spiegazioni termini enologici
+  ═══════════════════════════════════════════════════════ */
+  const GLOSSARIO = {
+    'acidit':    { titolo: 'Acidità', emoji: '🍋', testo: 'È la "spina dorsale" del vino. Alta acidità = vino fresco, vivace, che pulisce il palato. Bassa acidità = vino morbido, rotondo. I vini da pesce vogliono alta acidità; quelli da carne rossa la tollerano bassa.' },
+    'morbidezz': { titolo: 'Morbidezza', emoji: '🍯', testo: 'La sensazione vellutata in bocca, opposta alla durezza dei tannini. Un vino morbido avvolge il palato. Dipende da alcol, zuccheri residui e dall\'invecchiamento. Perfetto con piatti delicati e grassi.' },
+    'sapidit':   { titolo: 'Sapidità', emoji: '🌊', testo: 'La "salinità" del vino — quella sensazione minerale, quasi di brezza marina, che stimola la salivazione. Alta sapidità nei vini da suoli vulcanici o costieri (Vermentino, Assyrtiko). Esalta i sapori del cibo.' },
+    'struttur':  { titolo: 'Struttura', emoji: '🏛', testo: 'La "corporatura" del vino: quanto riempie la bocca. Un vino strutturato è denso, concentrato, persistente. Un vino leggero è agile e beverino. La struttura deve essere proporzionata al piatto: carne brasata vuole struttura, carpaccio no.' },
+    'tannin':    { titolo: 'Tannini', emoji: '🍇', testo: 'I polifenoli della buccia dell\'uva che danno quella sensazione di "astringenza" — come mordersi l\'interno della guancia. Presenti nei rossi, quasi assenti nei bianchi. Con il tempo si ammorbidiscono. Aiutano ad abbinare carni grasse e formaggi stagionati.' },
+    'compless':  { titolo: 'Complessità', emoji: '🌀', testo: 'Quante sfaccettature riesce a mostrare un vino al naso e in bocca. Un vino complesso evolve: cambia al naso, offre profumi diversi a ogni sorso. Frutta, spezie, terra, fiori, tabacco — tutti insieme. È il segno dei grandi vini e delle grandi annate.' },
+  };
+
+  function findGlossarioKey(text) {
+    const t = text.toLowerCase().replace(/[àáâã]/g,'a').replace(/[èéê]/g,'e').replace(/[ìí]/g,'i').replace(/[òó]/g,'o').replace(/[ùú]/g,'u');
+    return Object.keys(GLOSSARIO).find(k => t.includes(k));
+  }
+
+  let activeTooltip = null;
+
+  function showTooltip(btn, key) {
+    // Chiudi tooltip aperto
+    if (activeTooltip) { activeTooltip.remove(); activeTooltip = null; }
+
+    const info = GLOSSARIO[key];
+    if (!info) return;
+
+    const tip = document.createElement('div');
+    tip.style.cssText = `
+      position: fixed;
+      z-index: 999990;
+      background: #1a0e05;
+      border: 1px solid rgba(212,168,83,0.45);
+      border-radius: 10px;
+      padding: 14px 16px;
+      max-width: min(300px, 88vw);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+      animation: swFI 0.2s ease;
+      font-family: Georgia, serif;
+    `;
+
+    tip.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+        <span style="font-size:22px;">${info.emoji}</span>
+        <div>
+          <div style="font-size:13px;color:#d4a853;letter-spacing:2px;text-transform:uppercase;">${info.titolo}</div>
+          <div style="font-size:10px;color:rgba(200,180,150,0.4);letter-spacing:1px;">Glossario Sommelier</div>
+        </div>
+        <button style="margin-left:auto;background:transparent;border:none;color:rgba(200,185,160,0.5);font-size:18px;cursor:pointer;padding:0 4px;line-height:1;" onclick="this.closest('[data-tip]').remove()">✕</button>
+      </div>
+      <div style="font-size:13px;color:#d4c9b5;line-height:1.7;">${info.testo}</div>
+    `;
+    tip.setAttribute('data-tip', '1');
+
+    document.body.appendChild(tip);
+    activeTooltip = tip;
+
+    // Posiziona vicino al bottone
+    const rect = btn.getBoundingClientRect();
+    const tipW = 300;
+    const tipH = 160;
+
+    let left = rect.left;
+    let top  = rect.bottom + 8;
+
+    // Non uscire a destra
+    if (left + tipW > window.innerWidth - 12) left = window.innerWidth - tipW - 12;
+    if (left < 12) left = 12;
+
+    // Non uscire in basso
+    if (top + tipH > window.innerHeight - 12) top = rect.top - tipH - 8;
+
+    tip.style.left = left + 'px';
+    tip.style.top  = top + 'px';
+
+    // Chiudi toccando fuori
+    setTimeout(() => {
+      document.addEventListener('click', function handler(e) {
+        if (!tip.contains(e.target) && e.target !== btn) {
+          tip.remove();
+          if (activeTooltip === tip) activeTooltip = null;
+          document.removeEventListener('click', handler);
+        }
+      });
+    }, 100);
+  }
+
+  function hookQuestionMarks() {
+    // Cerca tutti i ? nella pagina
+    document.querySelectorAll('*').forEach(el => {
+      if (el.dataset.swTip) return;
+      if (el.children.length > 2) return;
+      const txt = el.textContent.trim();
+      if (txt !== '?' && !el.classList.toString().includes('help') && !el.title?.includes('?')) return;
+
+      // Trova il termine enologico vicino: guarda il label/testo del parent
+      const parent = el.closest('[class], section, div') || el.parentElement;
+      const context = parent?.textContent || '';
+      const key = findGlossarioKey(context);
+      if (!key) return;
+
+      el.dataset.swTip = '1';
+      el.style.cssText += `
+        cursor: pointer !important;
+        width: 22px !important; height: 22px !important;
+        border-radius: 50% !important;
+        background: rgba(212,168,83,0.15) !important;
+        border: 1px solid rgba(212,168,83,0.4) !important;
+        color: #d4a853 !important;
+        font-size: 12px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        transition: background 0.2s !important;
+        font-family: Georgia, serif !important;
+        flex-shrink: 0 !important;
+      `;
+      el.addEventListener('mouseenter', () => { el.style.background = 'rgba(212,168,83,0.3)'; });
+      el.addEventListener('mouseleave', () => { el.style.background = 'rgba(212,168,83,0.15)'; });
+      el.addEventListener('click', e => { e.stopPropagation(); showTooltip(el, key); });
+    });
   }
 
   init();
