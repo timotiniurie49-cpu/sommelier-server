@@ -1,72 +1,59 @@
 const express = require('express');
 const cors = require('cors');
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+require('dotenv').config();
+
 const app = express();
-
 const PORT = process.env.PORT || 3000;
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
-// CORS aperto — la sicurezza è nella chiave Groq nascosta sul server
+// Configurazione Gemini API
+// Usiamo il nome della variabile che hai impostato su Railway
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
+// Pagina di controllo (Health Check)
 app.get('/', (req, res) => {
   res.json({
     status: 'ok',
-    service: 'Sommelier World API',
-    version: '4.0.0',
-    groq: GROQ_API_KEY ? 'ok' : 'mancante',
-    key_chars: GROQ_API_KEY ? GROQ_API_KEY.length : 0
+    service: 'Sommelier World API (Gemini Edition)',
+    key_configured: process.env.GEMINI_API_KEY ? 'SÌ' : 'NO'
   });
 });
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok' });
-});
-
-app.post('/api/groq', async (req, res) => {
-  if (!GROQ_API_KEY) {
-    return res.status(500).json({ error: 'Servizio non disponibile' });
-  }
-
-  const { system, userMsg, maxTokens } = req.body;
-  if (!system || !userMsg) {
-    return res.status(400).json({ error: 'Parametri mancanti' });
+// IL TRUCCO: Questo endpoint accetta sia /api/chat che /api/groq
+// Così non devi cambiare nulla nel tuo vecchio file index.html!
+app.post(['/api/chat', '/api/groq'], async (req, res) => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  
+  if (!apiKey) {
+    return res.status(500).json({ error: 'API Key Gemini mancante su Railway' });
   }
 
   try {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + GROQ_API_KEY
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        max_tokens: maxTokens || 1000,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: userMsg }
-        ]
-      })
-    });
+    // Recuperiamo il messaggio dell'utente (gestiamo entrambi i formati possibili)
+    const userMessage = req.body.userMsg || req.body.prompt || req.body.message;
+    const systemInstructions = req.body.system || "Sei un esperto sommelier.";
 
-    const data = await response.json();
-    if (!response.ok) {
-      const msg = data.error?.message || 'Errore API';
-      if (msg.includes('Rate limit')) {
-        return res.status(429).json({ error: '⏳ Limite giornaliero raggiunto. Riprova domani.' });
-      }
-      return res.status(response.status).json({ error: msg });
-    }
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    res.json({ text: data.choices[0].message.content });
+    // Uniamo le istruzioni di sistema al messaggio per Gemini
+    const fullPrompt = `${systemInstructions}\n\nDomanda utente: ${userMessage}`;
+
+    const result = await model.generateContent(fullPrompt);
+    const response = await result.response;
+    const text = response.text();
+
+    // Inviamo la risposta nello stesso formato che si aspetta il tuo sito
+    res.json({ text: text });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("Errore Gemini:", err);
+    res.status(500).json({ error: "Il Sommelier ha avuto un problema: " + err.message });
   }
 });
 
 app.listen(PORT, () => {
-  console.log('Sommelier World Server v4.0 porta ' + PORT);
-  console.log('Groq: ' + (GROQ_API_KEY ? 'OK' : 'MANCANTE'));
+  console.log('Sommelier World Server v5.0 (Gemini) attivo sulla porta ' + PORT);
 });
