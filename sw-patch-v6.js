@@ -1,922 +1,951 @@
 /**
- * ╔═══════════════════════════════════════════════════════════════════╗
- * ║  SOMMELIER WORLD · PATCH v6  —  FIX COMPLETO                    ║
- * ║                                                                   ║
- * ║  PROBLEMI RISOLTI:                                               ║
- * ║  ✓ AI non genera per gli amici → tutto via Railway (no key)      ║
- * ║  ✓ Railway cold-start (30s sleep) → wake-up ping + skeleton UI  ║
- * ║  ✓ Eventi non disponibili → generati dall'AI (no API esterne)    ║
- * ║  ✓ Foto Pexels: Hero slideshow + Gallery + Terroir BG            ║
- * ║  ✓ Wizard abbinamento 3-step da ristorante                       ║
- * ║  ✓ Preferiti con localStorage (vino+piatto+spiegazione)          ║
- * ║  ✓ Contrasto + mobile-first + lazy loading                       ║
- * ║  ✓ Chat history (memoria conversazione)                          ║
- * ║  ✓ Gemini: filtri corpo/piatto, spiegazione abbinamento          ║
- * ╚═══════════════════════════════════════════════════════════════════╝
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  SOMMELIER WORLD · PATCH v7  — LUXURY RESTYLING                ║
+ * ║                                                                  ║
+ * ║  ✓ Palette premium: #0A0705 / Oro #D4AF37 / Rosso #4A0404       ║
+ * ║  ✓ Tipografia: Playfair Display + Lato                          ║
+ * ║  ✓ Glassmorphism nav + bordi arrotondati                        ║
+ * ║  ✓ Mobile above-the-fold: griglia 2×2 quick access             ║
+ * ║  ✓ Hero slideshow con foto Pexels viticoltura                   ║
+ * ║  ✓ Denominazioni: Italia protagonista, regioni, descrizioni     ║
+ * ║  ✓ Logo → Home sempre funzionante                               ║
+ * ║  ✓ Immagini contestuali per ogni sezione                        ║
+ * ╚══════════════════════════════════════════════════════════════════╝
  *
- * INSTALLAZIONE: aggiungi UNA SOLA riga in index.html prima di </body>
+ * Carica DOPO sw-patch-v6.js:
  *   <script src="sw-patch-v6.js"></script>
- *
- * Sostituisce sw-patch-v4.js e sw-patch-v5.js (non servono più)
+ *   <script src="sw-patch-v7.js"></script>
  */
 
 (function () {
   'use strict';
 
-  const SERVER   = 'https://sommelier-server-production-8f92.up.railway.app';
-  const LS_FAV   = 'sw_favorites_v1';
-  const LS_HIST  = 'sw_chat_history_v1';
-  const MAX_HIST = 8;
+  /* ═══════════════════════════════════════════════
+     PEXELS — immagini per categoria
+  ═══════════════════════════════════════════════ */
+  const PX = {
+    hero: [
+      { id: 442116,  cap: 'Terroir · Vigna al tramonto',        region: 'Piemonte' },
+      { id: 2702805, cap: 'Cantina · Barili in affinamento',    region: 'Toscana' },
+      { id: 1182264, cap: 'Vendemmia · Grappoli di Nebbiolo',   region: 'Langhe' },
+      { id: 3850838, cap: 'Sommelier · L\'arte del servizio',   region: 'Milano' },
+      { id: 4113579, cap: 'Filari · La geometria del vigneto',  region: 'Veneto' },
+      { id: 1407846, cap: 'Degustazione · Calici di cristallo', region: 'Borgogna' },
+    ],
+    denominazioni: 442116,
+    sommelier:     3850838,
+    produttori:    2702805,
+    events:        1407846,
+    glossario:     4113579,
+    hero_mobile:   1182264,
+  };
 
-  /* ═══════════════════════════════════════════════════════
-     1. WAKE-UP RAILWAY
-     Ping silenzioso appena la pagina si apre, così quando
-     l'utente preme "Consulta" il server è già sveglio.
-  ═══════════════════════════════════════════════════════ */
-  let serverAwake = false;
-  let _wakeP = null;
+  const px = (id, w = 1400, h = 800) =>
+    `https://images.pexels.com/photos/${id}/pexels-photo-${id}.jpeg?auto=compress&cs=tinysrgb&w=${w}&h=${h}&dpr=1`;
 
-  function wakeServer() {
-    if (serverAwake) return Promise.resolve();
-    if (_wakeP) return _wakeP;
-    _wakeP = fetch(SERVER + '/health', { signal: AbortSignal.timeout(35000) })
-      .then(() => { serverAwake = true; console.log('[SW-v6] Server sveglio ✓'); })
-      .catch(() => console.warn('[SW-v6] Server non risponde'));
-    return _wakeP;
+  /* ═══════════════════════════════════════════════
+     1. GOOGLE FONTS
+  ═══════════════════════════════════════════════ */
+  function loadFonts() {
+    if (document.querySelector('#sw7-fonts')) return;
+    const link = document.createElement('link');
+    link.id = 'sw7-fonts';
+    link.rel = 'stylesheet';
+    link.href = 'https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Lato:wght@300;400;700&family=Cinzel:wght@400;600;700&display=swap';
+    document.head.appendChild(link);
   }
 
-  /* ═══════════════════════════════════════════════════════
-     2. SYSTEM PROMPT PROFESSIONALE
-  ═══════════════════════════════════════════════════════ */
-  const SYS = `Sei il Maestro Sommelier di Sommelier World. Parli con la precisione di un Master of Wine e la poesia di chi vive tra vigne e cantine.
-
-REGOLE:
-• Mai citare prezzi — cambiano tra ristorante, enoteca e cantina
-• Cita produttori reali (Giacomo Conterno, Gaja, Antinori, López de Heredia, Domaine Leflaive…)
-• Specifica denominazione e annata consigliata o range (es. "cerca 2016-2019")
-• Spiega SEMPRE perché l'abbinamento funziona (acidità, tannini, struttura, grassezza del piatto)
-• Mantieni memoria della conversazione
-• Suggerisci 2 vini: uno classico, uno sorpresa
-• Tono: poetico ma diretto, da sommelier di ristorante stellato
-• Lingua: italiano salvo l'utente scriva altrimenti`;
-
-  /* ═══════════════════════════════════════════════════════
-     3. CHAT HISTORY (session storage — dura la sessione)
-  ═══════════════════════════════════════════════════════ */
-  let hist = (() => { try { return JSON.parse(sessionStorage.getItem(LS_HIST) || '[]'); } catch { return []; } })();
-
-  function addHist(role, content) {
-    hist.push({ role, content });
-    if (hist.length > MAX_HIST * 2) hist = hist.slice(-MAX_HIST * 2);
-    try { sessionStorage.setItem(LS_HIST, JSON.stringify(hist)); } catch {}
-  }
-
-  /* ═══════════════════════════════════════════════════════
-     4. CHIAMATA AI — ordine: Railway → Groq diretto → fallback
-     Gli amici usano Railway (no key necessaria).
-     Tu usi Railway + fallback Groq con la tua key.
-  ═══════════════════════════════════════════════════════ */
-  async function ask(userMsg) {
-    const userMsg_ = userMsg;
-    addHist('user', userMsg);
-    const messages = [{ role: 'system', content: SYS }, ...hist.slice(0, -1), { role: 'user', content: userMsg }];
-
-    // A) Railway via /api/groq (endpoint esistente nel server)
-    try {
-      await wakeServer();
-
-      // Costruisci il contesto dalla history per passarlo come userMsg
-      const histCtx = hist.slice(0, -1).map(m =>
-        (m.role === 'user' ? 'Utente: ' : 'Sommelier: ') + m.content
-      ).join('\n');
-      const userMsg = histCtx
-        ? histCtx + '\n\nUtente: ' + userMsg_
-        : userMsg_;
-
-      const r = await fetch(SERVER + '/api/groq', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system: SYS,
-          userMsg: userMsg,
-          maxTokens: 1800,
-        }),
-        signal: AbortSignal.timeout(30000),
-      });
-      if (r.ok) {
-        const d = await r.json();
-        const reply = d.text || d.content || d.reply || '';
-        if (reply) { addHist('assistant', reply); return reply; }
-      }
-    } catch (e) { console.warn('[SW-v6] Railway /api/groq:', e.message); }
-
-    // B) Groq diretto (fallback con tua key personale)
-    const key = localStorage.getItem('groqApiKey') || localStorage.getItem('groq_api_key') || '';
-    if (key) {
-      try {
-        const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-          body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages, max_tokens: 1800, temperature: 0.75 }),
-          signal: AbortSignal.timeout(20000),
-        });
-        if (r.ok) {
-          const d = await r.json();
-          const reply = d.choices?.[0]?.message?.content || '';
-          if (reply) { addHist('assistant', reply); return reply; }
-        }
-      } catch (e) { console.warn('[SW-v6] Groq diretto:', e.message); }
-    }
-
-    // C) Messaggio di emergenza
-    const fb = 'Il Sommelier è momentaneamente in cantina 🍷\n\nIl server si sta svegliando — riprova tra 20 secondi. Se il problema persiste, aggiorna la pagina.';
-    addHist('assistant', fb);
-    return fb;
-  }
-
-  window.SW_askSommelier = ask;
-
-  /* ═══════════════════════════════════════════════════════
-     5. HOOK FUNZIONI AI ESISTENTI (callAPI / callAPILong)
-     Il codice originale chiama queste funzioni con la key
-     Groq del localStorage. Le reindirizziamo a Railway.
-  ═══════════════════════════════════════════════════════ */
-  function hookOriginalAI() {
-    ['callAPI', 'callAPILong'].forEach(fn => {
-      if (typeof window[fn] === 'function') {
-        const orig = window[fn];
-        window[fn] = async (prompt, ...rest) => {
-          try { return await ask(prompt); }
-          catch { return orig(prompt, ...rest); }
-        };
-        console.log('[SW-v6] Reindirizzato ' + fn + ' → Railway ✓');
-      }
-    });
-
-    // Intercetta pulsante "CONSULTA IL SOMMELIER" se callAPI non è definita
-    function tryPatch() {
-      const btn = Array.from(document.querySelectorAll('button,[onclick]'))
-        .find(el => !el.dataset.swp && /consulta|sommelier/i.test(el.textContent));
-      if (!btn) return;
-      btn.dataset.swp = '1';
-
-      btn.addEventListener('click', async e => {
-        const sect = btn.closest('section,#sommelier,[data-tab="sommelier"]') || document.body;
-        const inp  = sect.querySelector('input[type="text"],textarea');
-        if (!inp?.value.trim()) return;
-
-        e.stopImmediatePropagation();
-        e.preventDefault();
-
-        const q = inp.value.trim();
-        let out = sect.querySelector('[id*="result"],[class*="result"],[id*="answer"]');
-        if (!out) {
-          out = document.createElement('div');
-          out.style.cssText = 'margin:20px 0;padding:20px;border-radius:10px;background:rgba(255,255,255,.04);border:1px solid rgba(212,168,83,.2);font-family:Georgia,serif;color:#d4c9b5;line-height:1.75;';
-          btn.parentNode.insertBefore(out, btn.nextSibling);
-        }
-
-        out.innerHTML = '<div style="display:flex;align-items:center;gap:12px;color:rgba(212,168,83,.6);font-family:Georgia,serif;font-size:14px;letter-spacing:1px;"><div style="font-size:28px;animation:swSpin 2s linear infinite">🍷</div><div>Il Sommelier sta valutando…<br><span style="font-size:11px;opacity:.6">~20s se il server era inattivo</span></div></div>';
-
-        const reply = await ask(q);
-        out.innerHTML = '<div style="margin-bottom:14px;font-size:15px;line-height:1.8;">' + reply.replace(/</g,'&lt;').replace(/\n/g,'<br>') + '</div>';
-        savBtn(out, reply, q);
-        updateBadge();
-      }, true);
-    }
-
-    let att = 0;
-    const iv = setInterval(() => { tryPatch(); if (++att > 30) clearInterval(iv); }, 400);
-  }
-
-  /* ═══════════════════════════════════════════════════════
-     6. EVENTI AI — niente API esterne, tutto generato
-  ═══════════════════════════════════════════════════════ */
-  const EV_KEY = 'sw_events_v1';
-  const EV_TTL = 6 * 3600 * 1000;
-
-  const EV_STATIC = [
-    { titolo:'Barolo Experience 2026',  luogo:'La Morra, Cuneo',     data:'Sab 4 Apr 2026',   tipo:'Degustazione', e:'🍷', desc:'Verticale Barolo 2016-2020 con i produttori delle Langhe.' },
-    { titolo:'Vinitaly 2026',           luogo:'Fiera di Verona',     data:'6-9 Apr 2026',      tipo:'Fiera',        e:'🏛', desc:'Il più grande salone del vino italiano. 4.000 espositori.' },
-    { titolo:'Champagne & Jazz',        luogo:'Milano, Navigli',     data:'Ven 10 Apr 2026',   tipo:'Evento',       e:'🥂', desc:'Maison di Champagne e musica dal vivo tra i Navigli.' },
-    { titolo:'Masterclass Nebbiolo',    luogo:'Torino',              data:'Dom 12 Apr 2026',   tipo:'Masterclass',  e:'🎓', desc:'Barolo, Barbaresco e Langhe Nebbiolo a confronto.' },
-    { titolo:'Tuscany Wine Week',       luogo:'Firenze',             data:'18-20 Apr 2026',    tipo:'Settimana',    e:'🌿', desc:'Brunello, Chianti Classico e Supertuscan nelle cantine aperte.' },
-    { titolo:'Orange Wine Festival',    luogo:'Trieste',             data:'Sab 25 Apr 2026',   tipo:'Festival',     e:'🧡', desc:'Vini macerati e naturali da Slovenia, Friuli e Georgia.' },
-  ];
-
-  async function getEvents() {
-    try {
-      const c = JSON.parse(localStorage.getItem(EV_KEY) || 'null');
-      if (c && Date.now() - c.ts < EV_TTL) return c.data;
-    } catch {}
-
-    // Usa /api/news (già nel server) poi trasforma in formato eventi
-    try {
-      await wakeServer();
-      // Prima prova con /api/groq per generare eventi
-      const r = await fetch(SERVER + '/api/groq', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system: 'Rispondi SOLO con un JSON array valido. Nessun markdown, nessun testo fuori dal JSON.',
-          userMsg: 'Crea 6 eventi realistici del mondo del vino in Europa per Aprile-Maggio 2026. Per ogni evento: titolo, luogo, data (es "Sab 4 Apr 2026"), tipo (Degustazione/Fiera/Masterclass/Festival), e (una emoji), desc (max 80 caratteri). Formato: JSON array.',
-          maxTokens: 900,
-        }),
-        signal: AbortSignal.timeout(18000),
-      });
-      if (r.ok) {
-        const d = await r.json();
-        const txt = (d.text || d.content || '').replace(/```json|```/g,'').trim();
-        const ev = JSON.parse(txt);
-        if (Array.isArray(ev) && ev.length > 0) {
-          localStorage.setItem(EV_KEY, JSON.stringify({ ts: Date.now(), data: ev }));
-          return ev;
-        }
-      }
-    } catch {}
-
-    return EV_STATIC;
-  }
-
-  function showEvents(evs) {
-    const sec = document.querySelector('#eventi,[data-tab="eventi"],.eventi-section');
-    if (!sec) return;
-
-    Array.from(sec.querySelectorAll('*'))
-      .filter(el => /non disponibil|riprova/i.test(el.textContent) && el.children.length < 3)
-      .forEach(el => { el.style.display = 'none'; });
-
-    document.querySelector('#sw-ev-grid')?.remove();
-    const g = document.createElement('div');
-    g.id = 'sw-ev-grid';
-    g.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px;padding:18px 0;';
-    g.innerHTML = evs.map(ev => `
-      <div style="background:rgba(255,255,255,.04);border:1px solid rgba(212,168,83,.18);border-radius:10px;padding:16px;font-family:Georgia,serif;transition:border-color .2s,transform .2s;"
-           onmouseenter="this.style.borderColor='rgba(212,168,83,.42)';this.style.transform='translateY(-2px)'"
-           onmouseleave="this.style.borderColor='rgba(212,168,83,.18)';this.style.transform='translateY(0)'">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:9px;">
-          <span style="font-size:24px">${ev.e||'🍷'}</span>
-          <div>
-            <div style="font-size:10px;color:rgba(212,168,83,.6);letter-spacing:2px;text-transform:uppercase;">${ev.tipo||'Evento'}</div>
-            <div style="font-size:14px;color:#f0e8d8;font-weight:bold;line-height:1.3;">${ev.titolo}</div>
-          </div>
-        </div>
-        <div style="font-size:11px;color:rgba(200,180,150,.5);margin-bottom:6px;letter-spacing:1px;">📍 ${ev.luogo} &nbsp;·&nbsp; 📅 ${ev.data}</div>
-        <div style="font-size:12px;color:#c8bfb0;line-height:1.6;">${ev.desc}</div>
-      </div>`).join('');
-    sec.appendChild(g);
-  }
-
-  async function initEvents() {
-    const sec = document.querySelector('#eventi,[data-tab="eventi"],.eventi-section');
-    if (!sec || sec.dataset.swEv) return;
-    sec.dataset.swEv = '1';
-
-    const sk = document.createElement('div');
-    sk.style.cssText = 'padding:20px;text-align:center;color:rgba(212,168,83,.5);font-family:Georgia,serif;letter-spacing:2px;font-size:13px;';
-    sk.textContent = '⏳ Caricamento eventi…';
-    sec.appendChild(sk);
-
-    const evs = await getEvents();
-    sk.remove();
-    showEvents(evs);
-
-    // Bottone aggiorna
-    sec.querySelectorAll('button').forEach(btn => {
-      if (btn.dataset.swEv) return;
-      btn.dataset.swEv = '1';
-      btn.addEventListener('click', async () => {
-        localStorage.removeItem(EV_KEY);
-        document.querySelector('#sw-ev-grid')?.remove();
-        sec.appendChild(sk);
-        const fresh = await getEvents();
-        sk.remove();
-        showEvents(fresh);
-      });
-    });
-  }
-
-  /* ═══════════════════════════════════════════════════════
-     7. FOTO PEXELS
-  ═══════════════════════════════════════════════════════ */
-  const px = (id, w=1400, h=800) => `https://images.pexels.com/photos/${id}/pexels-photo-${id}.jpeg?auto=compress&cs=tinysrgb&w=${w}&h=${h}&dpr=1`;
-
-  const HERO_PHOTOS = [
-    { id:442116,  c:'Terroir · Vigna al tramonto' },
-    { id:2702805, c:'Cantina · Affinamento in botte' },
-    { id:1182264, c:'Vendemmia · Grappoli maturi' },
-    { id:3850838, c:'Degustazione · L\'arte del Sommelier' },
-    { id:4113579, c:'Filari · La geometria del vigneto' },
-  ];
-  const GALLERY_PHOTOS = [
-    { id:442116, l:'Vigneto' }, { id:2702805, l:'Cantina' }, { id:1182264, l:'Vendemmia' },
-    { id:3850838, l:'Sommelier' }, { id:1407846, l:'Degustazione' }, { id:3407777, l:'Winery' },
-  ];
-
-  function injectHero() {
-    if (document.querySelector('#sw-hero')) return;
-    const home = document.querySelector('#home,[data-tab="home"],.home-section,section:first-of-type');
-    if (!home) return;
-
-    const wrap = document.createElement('div');
-    wrap.id = 'sw-hero';
-    wrap.style.cssText = 'position:relative;width:100%;height:clamp(280px,55vw,520px);overflow:hidden;';
-
-    HERO_PHOTOS.forEach((p, i) => {
-      const s = document.createElement('div');
-      s.className = 'sw-sl';
-      s.style.cssText = `position:absolute;inset:0;background:url('${px(p.id)}') center/cover no-repeat;opacity:${i===0?1:0};transition:opacity 1.4s ease;`;
-      s.insertAdjacentHTML('beforeend', '<div style="position:absolute;inset:0;background:linear-gradient(to bottom,rgba(10,5,2,.3),rgba(10,5,2,.65) 65%,rgba(10,5,2,.88));"></div>');
-      wrap.appendChild(s);
-    });
-
-    wrap.insertAdjacentHTML('beforeend', `
-      <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:5;pointer-events:none;text-align:center;padding:0 20px;">
-        <div style="font-family:Georgia,serif;font-size:clamp(26px,7vw,62px);color:#fff;letter-spacing:6px;text-transform:uppercase;text-shadow:0 4px 24px rgba(0,0,0,.6);font-weight:300;">Sommelier World</div>
-        <div style="font-family:Georgia,serif;font-size:clamp(12px,2.5vw,17px);color:rgba(212,168,83,.9);letter-spacing:4px;text-transform:uppercase;font-style:italic;margin-top:10px;text-shadow:0 2px 12px rgba(0,0,0,.5);">Dal suolo al bicchiere</div>
-      </div>`);
-
-    const dots = document.createElement('div');
-    dots.style.cssText = 'position:absolute;bottom:14px;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:10;';
-    HERO_PHOTOS.forEach((_, i) => {
-      const d = document.createElement('div');
-      d.style.cssText = `width:${i===0?20:6}px;height:6px;border-radius:3px;background:${i===0?'#d4a853':'rgba(255,255,255,.35)'};transition:all .4s;cursor:pointer;`;
-      d.onclick = () => go(i);
-      dots.appendChild(d);
-    });
-    wrap.appendChild(dots);
-    home.insertBefore(wrap, home.firstChild);
-
-    let cur = 0;
-    const slides = wrap.querySelectorAll('.sw-sl');
-    const dotEls = dots.querySelectorAll('div');
-    function go(n) {
-      slides[cur].style.opacity=0; dotEls[cur].style.width='6px'; dotEls[cur].style.background='rgba(255,255,255,.35)';
-      cur=n; slides[cur].style.opacity=1; dotEls[cur].style.width='20px'; dotEls[cur].style.background='#d4a853';
-    }
-    setInterval(() => go((cur+1)%slides.length), 5000);
-  }
-
-  function injectGallery() {
-    if (document.querySelector('#sw-gallery')) return;
-    const home = document.querySelector('#home,[data-tab="home"],.home-section,section:first-of-type');
-    if (!home) return;
-    const el = document.createElement('div');
-    el.id = 'sw-gallery';
-    el.innerHTML = `<div style="padding:40px 16px 48px;background:#0d0803;border-top:1px solid rgba(139,90,43,.2);border-bottom:1px solid rgba(139,90,43,.2);">
-      <div style="text-align:center;margin-bottom:26px;font-family:Georgia,serif;color:rgba(212,168,83,.7);letter-spacing:4px;text-transform:uppercase;font-size:12px;">· Il Mondo del Vino ·</div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;max-width:900px;margin:0 auto;" id="sw-gal-grid">
-        ${GALLERY_PHOTOS.map(p=>`<div style="position:relative;border-radius:6px;overflow:hidden;aspect-ratio:4/3;box-shadow:0 4px 20px rgba(0,0,0,.4);" onmouseenter="this.querySelector('img').style.transform='scale(1.06)'" onmouseleave="this.querySelector('img').style.transform='scale(1)'"><img src="${px(p.id,600,450)}" alt="${p.l}" loading="lazy" style="width:100%;height:100%;object-fit:cover;transition:transform .5s;display:block;"><div style="position:absolute;bottom:0;left:0;right:0;padding:10px 12px;background:linear-gradient(transparent,rgba(0,0,0,.7));color:rgba(255,255,255,.8);font-family:Georgia,serif;font-size:11px;letter-spacing:2px;text-transform:uppercase;">${p.l}</div></div>`).join('')}
-      </div>
-      <div style="text-align:center;margin-top:12px;font-size:10px;color:rgba(255,255,255,.2);font-family:Georgia,serif;">Photo credits: Pexels</div>
-    </div>`;
-    const children = Array.from(home.children);
-    (children[2] || home.lastElementChild)?.parentNode.insertBefore(el, (children[2] || home.lastElementChild)?.nextSibling);
-  }
-
-  function injectTerroirBg() {
-    const sec = document.querySelector('#terroir,[data-tab="terroir"],.terroir-section');
-    if (!sec || sec.dataset.swBg) return;
-    sec.dataset.swBg = '1';
-    Object.assign(sec.style, { backgroundImage:`url('${px(442116,1600,900)}')`, backgroundSize:'cover', backgroundPosition:'center', backgroundAttachment:'fixed', position:'relative' });
-    const ov = document.createElement('div');
-    ov.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:0;background:linear-gradient(to bottom,rgba(8,4,1,.88),rgba(8,4,1,.75) 50%,rgba(8,4,1,.92));';
-    sec.insertBefore(ov, sec.firstChild);
-    Array.from(sec.children).forEach(c => { if (c!==ov) { c.style.position='relative'; c.style.zIndex='1'; } });
-  }
-
-  /* ═══════════════════════════════════════════════════════
-     8. CSS GLOBALE
-  ═══════════════════════════════════════════════════════ */
+  /* ═══════════════════════════════════════════════
+     2. CSS PREMIUM — sovrascrive stili esistenti
+  ═══════════════════════════════════════════════ */
   function injectCSS() {
-    if (document.querySelector('#sw-v6-css')) return;
+    if (document.querySelector('#sw7-css')) return;
     const s = document.createElement('style');
-    s.id = 'sw-v6-css';
+    s.id = 'sw7-css';
     s.textContent = `
-      body{color:#e8e0d0!important;-webkit-font-smoothing:antialiased;}
-      p,.desc,.description{color:#d4c9b5!important;line-height:1.75!important;}
-      h1,h2,h3,h4{color:#f0e8d8!important;}
-      a{color:#d4a853!important;} a:hover{color:#e8c87a!important;}
-      input,textarea,select{background:rgba(255,255,255,.07)!important;color:#f0e8d8!important;border:1px solid rgba(212,168,83,.3)!important;border-radius:6px!important;padding:10px 14px!important;font-size:16px!important;}
-      input::placeholder,textarea::placeholder{color:rgba(200,185,160,.45)!important;}
-      input:focus,textarea:focus,select:focus{border-color:rgba(212,168,83,.7)!important;outline:none!important;box-shadow:0 0 0 2px rgba(212,168,83,.12)!important;}
-      button,.btn{min-height:44px!important;}
-      ::-webkit-scrollbar{width:5px;} ::-webkit-scrollbar-track{background:#0d0803;} ::-webkit-scrollbar-thumb{background:rgba(139,90,43,.5);border-radius:3px;}
-      img[loading="lazy"]{opacity:0;transition:opacity .5s;} img[loading="lazy"].sw-vis{opacity:1;}
-      @media(max-width:480px){h1{font-size:clamp(20px,7vw,32px)!important;}h2{font-size:clamp(17px,5vw,24px)!important;}body{overflow-x:hidden!important;}#sw-gal-grid{grid-template-columns:repeat(2,1fr)!important;}}
-      @keyframes swFI{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
-      @keyframes swSL{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
-      @keyframes swHB{0%,100%{transform:scale(1)}30%{transform:scale(1.4)}60%{transform:scale(1.15)}}
-      @keyframes swSpin{to{transform:rotate(360deg)}}
+      /* ── Variabili globali ── */
+      :root {
+        --sw7-nero:    #0A0705;
+        --sw7-oro:     #D4AF37;
+        --sw7-oro2:    #CD7F32;
+        --sw7-vino:    #4A0404;
+        --sw7-crema:   #F5EFE2;
+        --sw7-grigio:  rgba(245,239,226,0.55);
+        --sw7-radius:  8px;
+        --sw7-glass:   rgba(10,7,5,0.82);
+      }
+
+      /* ── Body & base ── */
+      body {
+        background: var(--sw7-nero) !important;
+        color: var(--sw7-crema) !important;
+        font-family: 'Lato', 'Helvetica Neue', sans-serif !important;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* ── Titoli con Playfair ── */
+      h1, h2, h3, .news-hero-title, .gz-title,
+      [class*="-title"]:not(button), .section-title {
+        font-family: 'Playfair Display', 'Cormorant Garamond', Georgia, serif !important;
+      }
+
+      /* ── Navbar — glassmorphism ── */
+      nav {
+        background: var(--sw7-glass) !important;
+        backdrop-filter: blur(16px) saturate(180%) !important;
+        -webkit-backdrop-filter: blur(16px) saturate(180%) !important;
+        border-bottom: 1px solid rgba(212,175,55,0.22) !important;
+        box-shadow: 0 2px 24px rgba(0,0,0,0.5) !important;
+        height: 54px !important;
+      }
+
+      /* Tab navigazione */
+      .ntab {
+        font-family: 'Lato', sans-serif !important;
+        font-size: 9px !important;
+        font-weight: 700 !important;
+        letter-spacing: 1.8px !important;
+        text-transform: uppercase !important;
+        color: rgba(212,175,55,0.55) !important;
+        padding: 6px 10px !important;
+        border-bottom: 2px solid transparent !important;
+        transition: color .2s, border-color .2s !important;
+        min-width: 52px !important;
+      }
+      .ntab.active, .ntab:hover {
+        color: var(--sw7-oro) !important;
+        border-bottom-color: var(--sw7-oro) !important;
+        background: rgba(212,175,55,0.07) !important;
+      }
+      .ntab .ico { font-size: 16px !important; display: block; margin-bottom: 2px; }
+      .ntab .lbl { display: block; }
+
+      /* ── Cards ── */
+      .news-item, .gz-card, .ev-card,
+      [class*="-card"], .prod-card {
+        border-radius: var(--sw7-radius) !important;
+        overflow: hidden !important;
+        border: 1px solid rgba(212,175,55,0.15) !important;
+        transition: border-color .25s, transform .25s, box-shadow .25s !important;
+      }
+      .news-item:hover, .gz-card:hover, .ev-card:hover {
+        border-color: rgba(212,175,55,0.4) !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.4) !important;
+      }
+
+      /* ── Bottoni premium ── */
+      button, .btn {
+        border-radius: var(--sw7-radius) !important;
+        font-family: 'Lato', sans-serif !important;
+        letter-spacing: 1.5px !important;
+      }
+
+      /* ── Inputs ── */
+      input, textarea, select {
+        border-radius: var(--sw7-radius) !important;
+        font-family: 'Lato', sans-serif !important;
+        background: rgba(255,255,255,0.06) !important;
+        border: 1px solid rgba(212,175,55,0.25) !important;
+        color: var(--sw7-crema) !important;
+        font-size: 16px !important;
+      }
+      input:focus, textarea:focus, select:focus {
+        border-color: rgba(212,175,55,0.6) !important;
+        box-shadow: 0 0 0 2px rgba(212,175,55,0.12) !important;
+        outline: none !important;
+      }
+
+      /* ── Sezioni header ── */
+      .page > div:first-child[style*="border-bottom"] {
+        background: linear-gradient(180deg, rgba(74,4,4,0.15) 0%, var(--sw7-nero) 100%) !important;
+        border-bottom: 1px solid rgba(212,175,55,0.2) !important;
+      }
+
+      /* ── Scrollbar ── */
+      ::-webkit-scrollbar { width: 5px; height: 5px; }
+      ::-webkit-scrollbar-track { background: var(--sw7-nero); }
+      ::-webkit-scrollbar-thumb { background: rgba(212,175,55,0.35); border-radius: 3px; }
+
+      /* ════════════════════════════════════════
+         QUICK ACCESS GRID  (mobile above fold)
+      ════════════════════════════════════════ */
+      #sw7-quick {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        padding: 16px;
+        background: var(--sw7-nero);
+      }
+      .sw7-qbtn {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 18px 12px;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(212,175,55,0.18);
+        border-radius: var(--sw7-radius);
+        cursor: pointer;
+        text-align: center;
+        transition: all .22s;
+        position: relative;
+        overflow: hidden;
+        min-height: 90px;
+      }
+      .sw7-qbtn::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background-size: cover;
+        background-position: center;
+        opacity: 0.12;
+        transition: opacity .3s;
+      }
+      .sw7-qbtn:hover::before, .sw7-qbtn:active::before { opacity: 0.22; }
+      .sw7-qbtn:hover {
+        border-color: rgba(212,175,55,0.45);
+        background: rgba(212,175,55,0.08);
+        transform: translateY(-1px);
+      }
+      .sw7-qbtn .q-ico  { font-size: 28px; line-height: 1; position: relative; z-index: 1; }
+      .sw7-qbtn .q-lbl  {
+        font-family: 'Lato', sans-serif;
+        font-size: 11px; font-weight: 700;
+        letter-spacing: 2px; text-transform: uppercase;
+        color: var(--sw7-oro);
+        position: relative; z-index: 1;
+      }
+      .sw7-qbtn .q-sub  {
+        font-family: 'Lato', sans-serif;
+        font-size: 10px; color: rgba(245,239,226,0.45);
+        letter-spacing: .5px;
+        position: relative; z-index: 1;
+      }
+      .sw7-qbtn .q-badge {
+        position: absolute; top: 8px; right: 8px;
+        background: var(--sw7-vino);
+        color: rgba(245,239,226,0.8);
+        font-size: 9px; font-weight: 700; letter-spacing: 1px;
+        padding: 2px 6px; border-radius: 10px;
+        font-family: 'Lato', sans-serif;
+        z-index: 2;
+      }
+
+      /* ════════════════════════════════════════
+         HERO SLIDESHOW v7
+      ════════════════════════════════════════ */
+      #sw7-hero {
+        position: relative;
+        width: 100%;
+        height: clamp(260px, 52vw, 480px);
+        overflow: hidden;
+      }
+      .sw7-slide {
+        position: absolute; inset: 0;
+        background-size: cover; background-position: center;
+        opacity: 0; transition: opacity 1.6s ease;
+      }
+      .sw7-slide.sw7-active { opacity: 1; }
+      .sw7-slide-ov {
+        position: absolute; inset: 0;
+        background: linear-gradient(
+          to bottom,
+          rgba(10,7,5,0.18) 0%,
+          rgba(10,7,5,0.5) 55%,
+          rgba(10,7,5,0.94) 100%
+        );
+      }
+      #sw7-hero-content {
+        position: absolute; inset: 0;
+        display: flex; flex-direction: column;
+        justify-content: flex-end;
+        padding: 20px 20px 28px;
+        z-index: 5; pointer-events: none;
+      }
+      #sw7-hero-kicker {
+        font-family: 'Lato', sans-serif;
+        font-size: 10px; font-weight: 700;
+        letter-spacing: 3.5px; text-transform: uppercase;
+        color: var(--sw7-oro); margin-bottom: 8px; opacity: .85;
+      }
+      #sw7-hero-title {
+        font-family: 'Playfair Display', serif;
+        font-size: clamp(1.6rem, 6vw, 2.8rem);
+        font-weight: 700; color: #fff; line-height: 1.18;
+        letter-spacing: .02em; margin-bottom: 8px;
+        text-shadow: 0 3px 18px rgba(0,0,0,.65);
+      }
+      #sw7-hero-sub {
+        font-family: 'Playfair Display', serif;
+        font-style: italic;
+        font-size: clamp(.85rem, 2.5vw, 1.05rem);
+        color: rgba(245,239,226,.65); margin-bottom: 10px;
+      }
+      #sw7-hero-meta {
+        font-family: 'Lato', sans-serif;
+        font-size: 10px; letter-spacing: 2px;
+        color: rgba(212,175,55,.55);
+      }
+      #sw7-hero-dots {
+        position: absolute; bottom: 12px; right: 18px;
+        display: flex; gap: 7px; z-index: 10;
+      }
+      .sw7-dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: rgba(255,255,255,.3);
+        transition: all .4s; cursor: pointer;
+      }
+      .sw7-dot.sw7-active {
+        background: var(--sw7-oro);
+        width: 18px; border-radius: 3px;
+      }
+
+      /* ════════════════════════════════════════
+         DENOMINAZIONI ITALIA — regioni
+      ════════════════════════════════════════ */
+      #sw7-italia-hero {
+        position: relative; overflow: hidden;
+        height: 180px; margin: 0 0 20px;
+        border-radius: 0;
+      }
+      #sw7-italia-hero img {
+        width: 100%; height: 100%; object-fit: cover;
+        filter: brightness(.6) saturate(1.2);
+      }
+      #sw7-italia-hero-content {
+        position: absolute; inset: 0;
+        display: flex; flex-direction: column;
+        justify-content: center; align-items: center;
+        text-align: center;
+        background: linear-gradient(rgba(74,4,4,.3), rgba(10,7,5,.6));
+      }
+      .sw7-region-pill {
+        display: inline-block;
+        padding: 6px 14px;
+        background: rgba(212,175,55,.12);
+        border: 1px solid rgba(212,175,55,.3);
+        border-radius: 20px;
+        font-family: 'Lato', sans-serif;
+        font-size: 11px; font-weight: 700;
+        letter-spacing: 2px; text-transform: uppercase;
+        color: var(--sw7-oro);
+        cursor: pointer;
+        transition: all .2s;
+        margin: 4px;
+      }
+      .sw7-region-pill:hover, .sw7-region-pill.sw7-active-region {
+        background: rgba(212,175,55,.22);
+        border-color: var(--sw7-oro);
+        color: var(--sw7-crema);
+      }
+      .sw7-den-card {
+        background: rgba(255,255,255,.035);
+        border: 1px solid rgba(212,175,55,.14);
+        border-radius: var(--sw7-radius);
+        margin: 0 14px 12px;
+        overflow: hidden;
+        transition: all .25s;
+        cursor: pointer;
+      }
+      .sw7-den-card:hover {
+        border-color: rgba(212,175,55,.38);
+        transform: translateY(-1px);
+        box-shadow: 0 6px 24px rgba(0,0,0,.35);
+      }
+      .sw7-den-card-header {
+        display: flex; align-items: center; gap: 12px;
+        padding: 14px 16px;
+        background: linear-gradient(135deg, rgba(74,4,4,.18), transparent);
+      }
+      .sw7-den-badge {
+        font-family: 'Lato', sans-serif;
+        font-size: 9px; font-weight: 700; letter-spacing: 1.5px;
+        padding: 3px 8px; border-radius: 4px;
+        text-transform: uppercase;
+        flex-shrink: 0;
+      }
+      .sw7-den-badge-docg { background: rgba(212,175,55,.18); color: var(--sw7-oro); border: 1px solid rgba(212,175,55,.3); }
+      .sw7-den-badge-doc  { background: rgba(205,127,50,.15); color: #CD7F32; border: 1px solid rgba(205,127,50,.3); }
+      .sw7-den-badge-igt  { background: rgba(100,100,100,.15); color: rgba(245,239,226,.6); border: 1px solid rgba(200,200,200,.2); }
+      .sw7-den-name {
+        font-family: 'Playfair Display', serif;
+        font-size: 1rem; font-weight: 700;
+        color: var(--sw7-crema); flex: 1;
+      }
+      .sw7-den-body { padding: 0 16px 16px; }
+      .sw7-den-grapes {
+        font-family: 'Lato', sans-serif;
+        font-size: 11px; letter-spacing: 1.5px;
+        color: var(--sw7-oro); text-transform: uppercase;
+        margin-bottom: 8px;
+      }
+      .sw7-den-desc {
+        font-family: 'Lato', sans-serif;
+        font-size: 13px; color: rgba(245,239,226,.7);
+        line-height: 1.7;
+      }
+      .sw7-den-terroir {
+        margin-top: 10px; padding-top: 10px;
+        border-top: 1px solid rgba(212,175,55,.1);
+        font-family: 'Lato', sans-serif;
+        font-size: 12px; color: rgba(245,239,226,.5);
+        font-style: italic; line-height: 1.6;
+      }
+
+      /* ════════════════════════════════════════
+         IMMAGINI SEZIONE contestuali
+      ════════════════════════════════════════ */
+      .sw7-section-hero {
+        width: 100%; height: 140px;
+        object-fit: cover; display: block;
+        filter: brightness(.55) saturate(1.15);
+        border-radius: 0;
+      }
+
+      /* ════════════════════════════════════════
+         RESPONSIVE
+      ════════════════════════════════════════ */
+      @media (min-width: 600px) {
+        #sw7-quick { grid-template-columns: repeat(4,1fr); }
+        .sw7-qbtn { min-height: 110px; }
+      }
+      @media (max-width: 480px) {
+        body { overflow-x: hidden !important; }
+      }
+
+      /* ════════════════════════════════════════
+         ANIMAZIONI
+      ════════════════════════════════════════ */
+      @keyframes sw7FI { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+      @keyframes sw7Pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
     `;
     document.head.appendChild(s);
+  }
 
-    if ('IntersectionObserver' in window) {
-      const obs = new IntersectionObserver(es => es.forEach(e => { if(e.isIntersecting){e.target.classList.add('sw-vis');obs.unobserve(e.target);} }), { rootMargin:'200px' });
-      const observe = img => obs.observe(img);
-      document.querySelectorAll('img[loading="lazy"]').forEach(observe);
-      new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => {
-        if (n.tagName==='IMG'&&n.getAttribute('loading')==='lazy') observe(n);
-        if (n.querySelectorAll) n.querySelectorAll('img[loading="lazy"]').forEach(observe);
-      }))).observe(document.body, { childList:true, subtree:true });
+  /* ═══════════════════════════════════════════════
+     3. HERO SLIDESHOW v7 (sostituisce quello di v6)
+  ═══════════════════════════════════════════════ */
+  function injectHero() {
+    if (document.querySelector('#sw7-hero')) return;
+
+    // Trova la sezione hero esistente e la nasconde
+    const oldHero = document.querySelector('#heroSection, #sw-hero');
+    if (oldHero) oldHero.style.display = 'none';
+
+    const home = document.querySelector('#page-home');
+    if (!home) return;
+
+    const hero = document.createElement('div');
+    hero.id = 'sw7-hero';
+
+    // Slides
+    PX.hero.forEach((p, i) => {
+      const slide = document.createElement('div');
+      slide.className = 'sw7-slide' + (i === 0 ? ' sw7-active' : '');
+      slide.style.backgroundImage = `url('${px(p.id)}')`;
+      slide.innerHTML = '<div class="sw7-slide-ov"></div>';
+      hero.appendChild(slide);
+    });
+
+    // Contenuto fisso
+    hero.insertAdjacentHTML('beforeend', `
+      <div id="sw7-hero-content">
+        <div id="sw7-hero-kicker">🍷 La Gazzetta del Terroir</div>
+        <div id="sw7-hero-title">Dal Suolo al Bicchiere</div>
+        <div id="sw7-hero-sub">L'enciclopedia mondiale del vino — 327 denominazioni, 28 paesi</div>
+        <div id="sw7-hero-meta" id="sw7-meta-date">
+          <span id="sw7-today"></span>
+          <span style="margin:0 10px;opacity:.3">·</span>
+          <span>327 DENOMINAZIONI · 28 PAESI</span>
+        </div>
+      </div>
+      <div id="sw7-hero-dots"></div>
+    `);
+
+    // Dots
+    const dotsEl = hero.querySelector('#sw7-hero-dots');
+    PX.hero.forEach((_, i) => {
+      const d = document.createElement('div');
+      d.className = 'sw7-dot' + (i === 0 ? ' sw7-active' : '');
+      d.onclick = () => goSlide(i);
+      dotsEl.appendChild(d);
+    });
+
+    // Inserisci prima del home-body
+    const homeBody = home.querySelector('.home-body');
+    home.insertBefore(hero, homeBody);
+
+    // Data italiana
+    const todayEl = document.querySelector('#sw7-today');
+    if (todayEl) {
+      const d = new Date();
+      const opts = { weekday:'long', day:'numeric', month:'long', year:'numeric' };
+      todayEl.textContent = d.toLocaleDateString('it-IT', opts);
+    }
+
+    // Autoplay
+    let cur = 0;
+    const slides = hero.querySelectorAll('.sw7-slide');
+    const dots   = hero.querySelectorAll('.sw7-dot');
+    const captions = PX.hero;
+
+    function goSlide(n) {
+      slides[cur].classList.remove('sw7-active');
+      dots[cur].classList.remove('sw7-active');
+      cur = n;
+      slides[cur].classList.add('sw7-active');
+      dots[cur].classList.add('sw7-active');
+      // Aggiorna caption
+      const titleEl = document.querySelector('#sw7-hero-title');
+      if (titleEl) titleEl.textContent = captions[cur].cap;
+    }
+
+    setInterval(() => goSlide((cur + 1) % slides.length), 5500);
+    console.log('[SW-v7] Hero slideshow ✓');
+  }
+
+  /* ═══════════════════════════════════════════════
+     4. QUICK ACCESS GRID — mobile above-the-fold
+  ═══════════════════════════════════════════════ */
+  const QUICK_BTNS = [
+    {
+      ico: '🍷', lbl: 'Sommelier', sub: 'Abbinamento AI',
+      page: 'sommelier', badge: 'AI',
+      img: px(PX.sommelier, 400, 300),
+    },
+    {
+      ico: '🌿', lbl: 'Terroir', sub: '327 denominazioni',
+      page: 'explore', badge: null,
+      img: px(PX.denominazioni, 400, 300),
+    },
+    {
+      ico: '🏅', lbl: 'Produttori', sub: 'Directory cantine',
+      page: 'producers', badge: 'NEW',
+      img: px(PX.produttori, 400, 300),
+    },
+    {
+      ico: '📅', lbl: 'Eventi', sub: 'Degustazioni & Fiere',
+      page: 'events', badge: null,
+      img: px(PX.events, 400, 300),
+    },
+  ];
+
+  function injectQuickGrid() {
+    if (document.querySelector('#sw7-quick')) return;
+
+    const homeBody = document.querySelector('#page-home .home-body');
+    if (!homeBody) return;
+
+    const grid = document.createElement('div');
+    grid.id = 'sw7-quick';
+
+    QUICK_BTNS.forEach(btn => {
+      const el = document.createElement('div');
+      el.className = 'sw7-qbtn';
+      el.style.cssText += `--bg:url('${btn.img}')`;
+      el.style.backgroundImage = `url('${btn.img}')`;
+      el.style.backgroundSize = 'cover';
+      el.style.backgroundPosition = 'center';
+
+      // Overlay scuro sopra l'immagine
+      el.innerHTML = `
+        <div style="position:absolute;inset:0;background:rgba(10,7,5,0.78);border-radius:inherit;"></div>
+        ${btn.badge ? `<div class="q-badge">${btn.badge}</div>` : ''}
+        <div class="q-ico">${btn.ico}</div>
+        <div class="q-lbl">${btn.lbl}</div>
+        <div class="q-sub">${btn.sub}</div>
+      `;
+
+      el.addEventListener('click', () => {
+        // Usa il sistema di navigazione esistente
+        const tab = document.querySelector(`.ntab[data-page="${btn.page}"]`);
+        if (tab) tab.click();
+        else {
+          // Fallback diretto
+          document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+          const target = document.querySelector(`#page-${btn.page}`);
+          if (target) { target.classList.add('active'); window.scrollTo(0, 0); }
+        }
+      });
+
+      grid.appendChild(el);
+    });
+
+    // Inserisci PRIMA delle notizie (primo figlio di home-body)
+    homeBody.insertBefore(grid, homeBody.firstChild);
+    console.log('[SW-v7] Quick grid ✓');
+  }
+
+  /* ═══════════════════════════════════════════════
+     5. LOGO → HOME (potenziato rispetto a v6)
+  ═══════════════════════════════════════════════ */
+  function fixLogoNav() {
+    const logo = document.querySelector('#navLogo, .nav-logo');
+    if (!logo || logo.dataset.sw7) return;
+    logo.dataset.sw7 = '1';
+    logo.style.cursor = 'pointer';
+
+    logo.addEventListener('click', () => {
+      // Chiudi eventuale wizard/pannello
+      ['#sw-wiz','#sw-fp','#sw7-den-panel'].forEach(sel => {
+        const el = document.querySelector(sel);
+        if (el) { el.style.display = 'none'; document.body.style.overflow = ''; }
+      });
+
+      // Attiva tab Home
+      const homeTab = document.querySelector('.ntab[data-page="home"]');
+      if (homeTab) {
+        homeTab.click();
+      } else {
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        const h = document.querySelector('#page-home');
+        if (h) h.classList.add('active');
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    console.log('[SW-v7] Logo → Home ✓');
+  }
+
+  /* ═══════════════════════════════════════════════
+     6. IMMAGINI CONTESTUALI nelle sezioni
+  ═══════════════════════════════════════════════ */
+  function injectSectionImages() {
+    const sections = [
+      { page: 'page-explore',   photoId: PX.denominazioni },
+      { page: 'page-sommelier', photoId: PX.sommelier },
+      { page: 'page-events',    photoId: PX.events },
+      { page: 'page-produttori', photoId: PX.produttori },
+    ];
+
+    sections.forEach(({ page, photoId }) => {
+      const sec = document.querySelector(`#${page}`);
+      if (!sec || sec.dataset.sw7img) return;
+      sec.dataset.sw7img = '1';
+
+      const header = sec.querySelector('div:first-child');
+      if (!header) return;
+
+      // Aggiungi immagine di sfondo all'header di sezione
+      Object.assign(header.style, {
+        backgroundImage: `url('${px(photoId, 800, 200)}')`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        position: 'relative',
+      });
+
+      // Overlay per leggibilità
+      if (!header.querySelector('.sw7-hov')) {
+        const ov = document.createElement('div');
+        ov.className = 'sw7-hov';
+        ov.style.cssText = 'position:absolute;inset:0;background:linear-gradient(rgba(10,7,5,.75),rgba(10,7,5,.92));z-index:0;';
+        header.insertBefore(ov, header.firstChild);
+        Array.from(header.children).forEach(c => {
+          if (c !== ov) { c.style.position = 'relative'; c.style.zIndex = '1'; }
+        });
+      }
+    });
+  }
+
+  /* ═══════════════════════════════════════════════
+     7. DENOMINAZIONI ITALIA — regioni con desc ricche
+  ═══════════════════════════════════════════════ */
+  const ITALIA_REGIONI = {
+    'Piemonte': {
+      emoji: '🏔',
+      desc: 'La Borgogna italiana. Nebbiolo sovrano tra le Langhe e il Monferrato.',
+      dens: [
+        {
+          name: 'Barolo DOCG', type: 'DOCG', grapes: 'Nebbiolo',
+          desc: 'Il Re dei vini italiani. Nasce tra le colline di La Morra, Castiglione Falletto e Serralunga d\'Alba su marne calcaree helvetiane. Un vino di struttura maestosa, capace di vivere mezzo secolo.',
+          terroir: 'Suoli: marne tortoniane (Serralunga) vs. elvetiane (La Morra). I tannini di Serralunga hanno la durezza della roccia; quelli di La Morra, la seta. Affinamento minimo 38 mesi.',
+          profilo: 'Viola appassita, tabacco, catrame, rosa secca, spezie. Tannini poderosi, acidità alta, lunga persistenza.',
+          curiosita: 'Il nome "Barolo" appare per la prima volta nel 1798 in una lettera del conte Balbiano. Camillo Cavour contribuì a modernizzarne la produzione.',
+        },
+        {
+          name: 'Barbaresco DOCG', type: 'DOCG', grapes: 'Nebbiolo',
+          desc: 'La Regina — più femminile del Barolo, eppure ugualmente aristocratica. Le MGA (Menzioni Geografiche Aggiuntive) come Asili, Rabajà e Martinenga definiscono i cru più preziosi.',
+          terroir: 'Suoli di tufo e sabbia più soffice rispetto al Barolo. Il Nebbiolo esprime qui eleganza prima della potenza. Affinamento minimo 26 mesi.',
+          profilo: 'Geranio, rosa, fragola matura, spezie orientali. Tannini fini, acidità viva, persistenza notevole.',
+          curiosita: 'Angelo Gaja rivoluzionò il Barbaresco negli anni \'60, introducendo pratiche borgognone che cambiarono la viticoltura italiana.',
+        },
+        {
+          name: 'Barbera d\'Asti DOCG', type: 'DOCG', grapes: 'Barbera',
+          desc: 'Il vino quotidiano dei piemontesi, elevato a dignità nobile. Le sottozone Nizza e Tinella raggiungono complessità straordinarie con invecchiamento in legno.',
+          terroir: 'Argille calcaree delle colline astigiane. L\'acidità naturale elevata è il marchio di fabbrica.',
+          profilo: 'Ciliegia, mora, amarena, note balsamiche. Acidità vivace, tannini morbidi, finale fresco.',
+          curiosita: 'La Barbera era storicamente il vino dei contadini. Oggi la sottozona Nizza ha ottenuto una propria DOCG nel 2014.',
+        },
+        {
+          name: 'Moscato d\'Asti DOCG', type: 'DOCG', grapes: 'Moscato Bianco',
+          desc: 'Il più aromatico e delicato dei vini piemontesi. Leggermente frizzante, dolce senza essere stucchevole, con gradazione alcolica bassissima.',
+          terroir: 'Colline di Canelli, Santo Stefano Belbo, Mango. Il microclima caldo e soleggiato concentra gli aromi del Moscato Bianco.',
+          profilo: 'Pesca, albicocca, fiori d\'acacia, note di muschio. Bollicine fini, dolcezza calibrata, bassa gradazione.',
+          curiosita: 'La vendemmia avviene sempre a fine settembre e i vigneti più pregiati si trovano sulle "sorì" (versanti soleggiati a sud).',
+        },
+      ],
+    },
+    'Toscana': {
+      emoji: '🌾',
+      desc: 'Il Sangiovese regna sovrano. Dalla Chianti Classico al Brunello, dalla costa tirrenica alle colline senesi.',
+      dens: [
+        {
+          name: 'Brunello di Montalcino DOCG', type: 'DOCG', grapes: 'Sangiovese Grosso (Brunello)',
+          desc: 'Il più longevo dei vini italiani. Montalcino è una fortezza medievale a 564 metri sul livello del mare, con un microclima unico tra la Maremma e le Crete Senesi.',
+          terroir: 'Suoli di galestro e alberese. I quattro versanti della collina danno vini profondamente diversi: il nord più fresco ed elegante, il sud più caldo e strutturato.',
+          profilo: 'Ciliegia sotto spirito, tabacco, cuoio, fiori secchi, note eteree. Struttura tannica imponente, acidità alta, longevo 30-50 anni.',
+          curiosita: 'Ferruccio Biondi-Santi inventò letteralmente il Brunello nella seconda metà dell\'Ottocento. Prima era semplicemente "Rosso di Montalcino".',
+        },
+        {
+          name: 'Chianti Classico DOCG', type: 'DOCG', grapes: 'Sangiovese',
+          desc: 'Il cuore storico della Toscana del vino. Il territorio tra Firenze e Siena custodisce il Gallo Nero, simbolo di una delle denominazioni più antiche d\'Italia.',
+          terroir: 'Galestro e alberese alternati. La Gran Selezione è il vertice qualitativo, con vini da singolo vigneto che competono con i migliori al mondo.',
+          profilo: 'Ciliegia fresca, viola, spezie, cuoio, note floreali. Tannini vivi, acidità brillante, grande bevibilità.',
+          curiosita: 'Il Consorzio del Gallo Nero nacque nel 1924, uno dei primi consorzi di tutela in Italia.',
+        },
+        {
+          name: 'Bolgheri DOC', type: 'DOC', grapes: 'Cabernet Sauvignon, Merlot, Cabernet Franc',
+          desc: 'La rivoluzione costiera degli anni \'70. Sassicaia, Ornellaia e Masseto hanno riscritto le regole del vino italiano, portando i vitigni internazionali a esprimere una voce toscana unica.',
+          terroir: 'Suoli limosi e argillosi vicino al mare Tirreno. La Sassicaia ha ottenuto nel 1994 la sua DOC dedicata — unica in Italia per una singola azienda.',
+          profilo: 'Ribes nero, mirtillo, cedro, grafite, spezie. Struttura bordolese con eleganza italiana.',
+          curiosita: 'Sassicaia 1985 vinse il confronto con i migliori Bordeaux nella famosa degustazione di Decanter del 1986, ottenendo punteggi superiori.',
+        },
+      ],
+    },
+    'Veneto': {
+      emoji: '🏛',
+      desc: 'Dal Lago di Garda alle Dolomiti, dall\'Amarone al Prosecco. La regione più produttiva d\'Italia.',
+      dens: [
+        {
+          name: 'Amarone della Valpolicella DOCG', type: 'DOCG', grapes: 'Corvina, Corvinone, Rondinella',
+          desc: 'Il grande vino dell\'appassimento. Le uve vengono lasciate ad asciugare per 90-120 giorni in apposite fruttai detti "arele", perdendo il 30% del loro peso. Il risultato è un vino di straordinaria concentrazione.',
+          terroir: 'Tre zone: Classico (la più pregiata), Valpantena e Est. I migliori vigneti sono su calcari e basalti a quote tra 200 e 600 metri.',
+          profilo: 'Ciliegia sotto spirito, prugna, cioccolato, spezie orientali, tabacco. Gradazione 15-17%, tannini vellutati, persistenza infinita.',
+          curiosita: 'Il nome "Amarone" (da amaro) fu scelto per distinguerlo dal Recioto dolce. Fino agli anni \'50 era considerato un difetto di produzione del Recioto.',
+        },
+        {
+          name: 'Soave Classico DOC', type: 'DOC', grapes: 'Garganega, Trebbiano di Soave',
+          desc: 'Il bianco più famoso del Veneto. La zona Classica su basalto e tufo vulcanico produce vini di mineralità e struttura sorprendenti.',
+          terroir: 'Basalti e tufi di origine vulcanica nella zona storica. I vigneti in quota su terreni magri danno la migliore espressione varietale.',
+          profilo: 'Mandorla, fiori bianchi, agrumi, note minerali. Freschezza vivace, finale ammandorlato tipico.',
+          curiosita: 'La Garganega è uno dei vitigni autoctoni più antichi d\'Italia, citata già nel Medioevo nei documenti del comune di Verona.',
+        },
+      ],
+    },
+    'Campania': {
+      emoji: '🌋',
+      desc: 'I vitigni autoctoni di una terra vulcanica. Fiano, Greco, Aglianico: radici greche, carattere tutto italiano.',
+      dens: [
+        {
+          name: 'Taurasi DOCG', type: 'DOCG', grapes: 'Aglianico',
+          desc: 'Il "Barolo del Sud". L\'Aglianico sui suoli vulcanici dell\'Irpinia produce un vino di struttura nordica con il calore del sole campano.',
+          terroir: 'Suoli vulcanici a 400-700 metri di quota. Le escursioni termiche diurne preservano l\'acidità nonostante il calore estivo.',
+          profilo: 'Ciliegia nera, prugna, tabacco, cuoio, spezie. Acidità tagliente, tannini fibrosi, lunga vita in bottiglia.',
+          curiosita: 'Antonio Mastroberardino riportò il Taurasi all\'attenzione internazionale dopo la seconda guerra mondiale, recuperando cloni antichi di Aglianico.',
+        },
+        {
+          name: 'Fiano di Avellino DOCG', type: 'DOCG', grapes: 'Fiano',
+          desc: 'Uno dei più grandi bianchi italiani. Sui colli irpini a 400-700 metri, il Fiano esprime una complessità aromatica e una capacità di invecchiamento rare tra i bianchi meridionali.',
+          terroir: 'Suoli argillosi e calcari su versanti collinari. Il comune di Lapio e Sorbo Serpico producono i vini più longevi.',
+          profilo: 'Miele, noce, pera, erbe aromatiche, note affumicate. Struttura minerale, acidità calibrata.',
+          curiosita: 'Il Fiano era già citato da Plinio il Vecchio come "Vitis Apiana" (vite amata dalle api) per il suo mosto dolcissimo.',
+        },
+      ],
+    },
+    'Sicilia': {
+      emoji: '☀️',
+      desc: 'Il vulcano, il sale, il sole. L\'Etna come Borgogna, il Nero d\'Avola come ambasciatore nel mondo.',
+      dens: [
+        {
+          name: 'Etna DOC', type: 'DOC', grapes: 'Nerello Mascalese, Carricante',
+          desc: 'La montagna di fuoco ha riscritto la mappa del vino siciliano. I vigneti ad alberello centenario su suoli vulcanici a 400-1000 metri producono vini di sorprendente eleganza.',
+          terroir: 'Sabbie nere laviche e ceneri vulcaniche. Ogni contrada (simile ai cru di Borgogna) ha caratteristiche uniche. Quota e versante determinano il carattere.',
+          profilo: 'Fragola selvatica, lampone, spezie, grafite, note minerali vulcaniche. Acidità alta, tannini fini, grande freschezza nonostante il sole.',
+          curiosita: 'L\'Etna è il vulcano attivo più alto d\'Europa. Molti vigneti hanno viti pre-fillossera con radici franche su terreni vulcanici inospitali per il parassita.',
+        },
+        {
+          name: 'Passito di Pantelleria DOC', type: 'DOC', grapes: 'Zibibbo (Moscato d\'Alessandria)',
+          desc: 'L\'isola del vento e del sole africano. Lo Zibibbo viene appassito sotto il sole implacabile di Pantelleria, tra terrazzamenti di lava nera che trattengono il calore di notte.',
+          terroir: 'Suoli lavici neri su un\'isola a 70 km dalla Tunisia. La vite è allevata ad alberello bassissimo (pantesco) per resistere allo scirocco.',
+          profilo: 'Fico secco, dattero, albicocca candita, miele, agrumi. Dolcezza opulenta, acidità che equilibra.',
+          curiosita: 'Ben\'Ryé di Donnafugata è stato eletto più volte tra i migliori vini dolci del mondo. Il nome in arabo significa "figlio del vento".',
+        },
+      ],
+    },
+  };
+
+  function injectItaliaSection() {
+    const explorePage = document.querySelector('#page-explore');
+    if (!explorePage || document.querySelector('#sw7-italia')) return;
+
+    // Crea sezione Italia dedicata
+    const italiaSection = document.createElement('div');
+    italiaSection.id = 'sw7-italia';
+    italiaSection.style.cssText = 'background:var(--sw7-nero);';
+
+    // Hero Italia
+    italiaSection.innerHTML = `
+      <div id="sw7-italia-hero">
+        <img src="${px(442116, 800, 300)}" alt="Vigne italiane" loading="lazy">
+        <div id="sw7-italia-hero-content">
+          <div style="font-family:'Lato',sans-serif;font-size:10px;font-weight:700;letter-spacing:3px;color:rgba(212,175,55,.7);text-transform:uppercase;margin-bottom:8px;">🇮🇹 Italia</div>
+          <div style="font-family:'Playfair Display',serif;font-size:1.5rem;font-weight:700;color:#fff;text-shadow:0 2px 12px rgba(0,0,0,.5);">Le Denominazioni Italiane</div>
+          <div style="font-family:'Playfair Display',serif;font-style:italic;font-size:.9rem;color:rgba(245,239,226,.6);margin-top:6px;">Dal Nebbiolo delle Langhe al Nerello dell'Etna</div>
+        </div>
+      </div>
+
+      <!-- Pills regioni -->
+      <div id="sw7-region-pills" style="padding:16px 14px;display:flex;flex-wrap:wrap;gap:6px;border-bottom:1px solid rgba(212,175,55,.1);">
+        ${Object.entries(ITALIA_REGIONI).map(([name, r]) =>
+          `<div class="sw7-region-pill" data-region="${name}">${r.emoji} ${name}</div>`
+        ).join('')}
+        <div class="sw7-region-pill sw7-active-region" data-region="all">🌍 Tutte</div>
+      </div>
+
+      <!-- Cards denominazioni -->
+      <div id="sw7-den-list" style="padding:14px 0 20px;"></div>
+    `;
+
+    // Inserisci all'inizio della pagina explore, dopo l'header
+    const firstDiv = explorePage.querySelector('div:first-child');
+    if (firstDiv && firstDiv.nextSibling) {
+      explorePage.insertBefore(italiaSection, firstDiv.nextSibling);
+    } else {
+      explorePage.appendChild(italiaSection);
+    }
+
+    // Render denominazioni
+    renderDenominazioni('all');
+
+    // Gestione pills
+    italiaSection.querySelectorAll('.sw7-region-pill').forEach(pill => {
+      pill.addEventListener('click', () => {
+        italiaSection.querySelectorAll('.sw7-region-pill').forEach(p => p.classList.remove('sw7-active-region'));
+        pill.classList.add('sw7-active-region');
+        renderDenominazioni(pill.dataset.region);
+      });
+    });
+
+    console.log('[SW-v7] Italia denominazioni ✓');
+  }
+
+  function renderDenominazioni(filter) {
+    const list = document.querySelector('#sw7-den-list');
+    if (!list) return;
+
+    list.innerHTML = '';
+    list.style.animation = 'sw7FI .3s ease';
+
+    const regions = filter === 'all'
+      ? Object.entries(ITALIA_REGIONI)
+      : [[filter, ITALIA_REGIONI[filter]]].filter(([,v]) => v);
+
+    regions.forEach(([regionName, region]) => {
+      if (!region) return;
+
+      // Header regione
+      const rHead = document.createElement('div');
+      rHead.style.cssText = `
+        padding: 14px 14px 8px;
+        font-family: 'Lato', sans-serif;
+        font-size: 10px; font-weight: 700; letter-spacing: 3px;
+        text-transform: uppercase; color: var(--sw7-oro);
+        border-top: 1px solid rgba(212,175,55,.12);
+        margin-top: ${filter === 'all' ? '8px' : '0'};
+      `;
+      rHead.textContent = `${region.emoji} ${regionName}`;
+      list.appendChild(rHead);
+
+      // Desc regione
+      const rDesc = document.createElement('div');
+      rDesc.style.cssText = 'padding:0 14px 12px;font-family:\'Playfair Display\',serif;font-style:italic;font-size:.85rem;color:rgba(245,239,226,.5);';
+      rDesc.textContent = region.desc;
+      list.appendChild(rDesc);
+
+      // Cards
+      region.dens.forEach(den => {
+        const card = document.createElement('div');
+        card.className = 'sw7-den-card';
+
+        const typeClass = {
+          DOCG: 'sw7-den-badge-docg',
+          DOC:  'sw7-den-badge-doc',
+          IGT:  'sw7-den-badge-igt',
+        }[den.type] || 'sw7-den-badge-doc';
+
+        card.innerHTML = `
+          <div class="sw7-den-card-header">
+            <span class="sw7-den-badge ${typeClass}">${den.type}</span>
+            <span class="sw7-den-name">${den.name.replace(/ DOCG| DOC| IGT/g,'')}</span>
+          </div>
+          <div class="sw7-den-body">
+            <div class="sw7-den-grapes">🍇 ${den.grapes}</div>
+            <div class="sw7-den-desc">${den.desc}</div>
+            <div class="sw7-den-terroir">
+              <strong style="color:rgba(212,175,55,.7);font-style:normal;">Terroir:</strong> ${den.terroir}
+              <br><br>
+              <strong style="color:rgba(212,175,55,.7);font-style:normal;">Profilo:</strong> ${den.profilo}
+              <br><br>
+              <strong style="color:rgba(212,175,55,.7);font-style:normal;">Curiosità:</strong> ${den.curiosita}
+            </div>
+          </div>
+        `;
+
+        // Toggle descrizione
+        const body = card.querySelector('.sw7-den-body');
+        body.style.display = 'none';
+        card.querySelector('.sw7-den-card-header').addEventListener('click', () => {
+          const open = body.style.display !== 'none';
+          body.style.display = open ? 'none' : 'block';
+          if (!open) body.style.animation = 'sw7FI .3s ease';
+        });
+
+        list.appendChild(card);
+      });
+    });
+  }
+
+  /* ═══════════════════════════════════════════════
+     8. HERO HEIGHT — riduce su mobile per above-fold
+  ═══════════════════════════════════════════════ */
+  function optimizeHeroMobile() {
+    if (window.innerWidth > 600) return;
+    const hero = document.querySelector('#sw7-hero, #heroSection');
+    if (hero) {
+      hero.style.height = 'clamp(220px, 48vw, 320px)';
     }
   }
 
-  /* ═══════════════════════════════════════════════════════
-     9. PREFERITI
-  ═══════════════════════════════════════════════════════ */
-  const F = {
-    all()  { try{return JSON.parse(localStorage.getItem(LS_FAV)||'[]');}catch{return[];} },
-    add(x) { const l=this.all(); l.unshift({id:Date.now(),date:new Date().toLocaleDateString('it-IT',{day:'2-digit',month:'short',year:'numeric'}),...x}); if(l.length>50)l.pop(); localStorage.setItem(LS_FAV,JSON.stringify(l)); },
-    del(id){ localStorage.setItem(LS_FAV,JSON.stringify(this.all().filter(f=>f.id!==id))); },
-    clr()  { localStorage.removeItem(LS_FAV); },
-  };
-
-  function parse(text) {
-    return {
-      wine: text.match(/(?:vino\s+(?:consigliato|ideale)|raccomando)[:\s]+([^\n.]{5,80})/i)?.[1]?.trim()||'',
-      food: text.match(/(?:con|per|abbinamento con)[:\s]+([^\n.]{5,60})/i)?.[1]?.trim()||'',
-      explanation: text.match(/(?:perch[eé]|l'acidit|tannin|struttura|funziona)[^\n.]{10,}[.!]/i)?.[0]?.trim()||text.slice(0,160)+'…',
-    };
-  }
-
-  function savBtn(el, text, query) {
-    el.querySelectorAll('.sw-sb').forEach(b=>b.remove());
-    const p = parse(text);
-    if (query && !p.food) p.food = query.slice(0,60);
-    const b = document.createElement('button');
-    b.className = 'sw-sb';
-    b.innerHTML = '♥ Salva abbinamento';
-    b.style.cssText = 'margin-top:12px;padding:9px 20px;background:transparent;border:1px solid rgba(212,168,83,.35);color:#d4a853;border-radius:6px;cursor:pointer;font-family:Georgia,serif;font-size:13px;letter-spacing:1.5px;transition:all .2s;';
-    b.onmouseenter=()=>{b.style.background='rgba(212,168,83,.1)';b.style.borderColor='#d4a853';};
-    b.onmouseleave=()=>{b.style.background='transparent';b.style.borderColor='rgba(212,168,83,.35)';};
-    b.onclick=()=>{ F.add({...p,rawText:text}); b.innerHTML='♥ Salvato!'; b.style.color='#4caf50'; b.style.animation='swHB .6s'; renderFavs(); updateBadge(); toast('♥ Salvato!','success'); setTimeout(()=>{b.disabled=true;b.style.opacity='.5';},1200); };
-    el.appendChild(b);
-  }
-
-  function buildFavPanel() {
-    if (document.querySelector('#sw-fp')) return;
-    const p = document.createElement('div');
-    p.id='sw-fp';
-    p.style.cssText='display:none;position:fixed;top:0;right:0;width:min(420px,100vw);height:100dvh;background:#100a04;z-index:99998;border-left:1px solid rgba(212,168,83,.2);box-shadow:-8px 0 40px rgba(0,0,0,.7);flex-direction:column;overflow:hidden;animation:swSL .3s ease;font-family:Georgia,serif;';
-    p.innerHTML=`<div style="padding:18px 20px 14px;border-bottom:1px solid rgba(212,168,83,.12);display:flex;align-items:center;justify-content:space-between;background:#0d0803;flex-shrink:0;"><div><div style="font-size:17px;color:#d4a853;letter-spacing:2px;text-transform:uppercase;">♥ I Miei Preferiti</div><div id="sw-fc" style="font-size:11px;color:rgba(200,180,150,.5);margin-top:2px;letter-spacing:1px;">0 abbinamenti</div></div><div style="display:flex;gap:8px;"><button onclick="SW_V6.clrFavs()" style="background:transparent;border:1px solid rgba(200,80,80,.3);color:rgba(200,100,100,.6);padding:5px 9px;border-radius:4px;cursor:pointer;font-size:11px;">🗑 Tutti</button><button onclick="SW_V6.closeFavs()" style="background:transparent;border:none;color:rgba(200,185,160,.5);font-size:22px;cursor:pointer;padding:2px 8px;line-height:1;">✕</button></div></div><div id="sw-fl" style="flex:1;overflow-y:auto;padding:14px;"></div>`;
-    document.body.appendChild(p);
-    renderFavs();
-  }
-
-  function renderFavs() {
-    const l=document.querySelector('#sw-fl'), c=document.querySelector('#sw-fc');
-    if (!l) return;
-    const favs=F.all();
-    if (c) c.textContent=favs.length+' abbinament'+(favs.length!==1?'i':'o')+' salvat'+(favs.length!==1?'i':'o');
-    if (!favs.length){ l.innerHTML='<div style="text-align:center;padding:60px 20px;color:rgba(200,180,150,.4);font-size:14px;line-height:1.8;"><div style="font-size:36px;margin-bottom:14px">🍷</div>Nessun abbinamento salvato.<br>Consulta il Sommelier e salva<br>i tuoi preferiti con ♥</div>'; return; }
-    l.innerHTML=favs.map(f=>`<div style="background:rgba(255,255,255,.04);border:1px solid rgba(212,168,83,.15);border-radius:8px;padding:15px;margin-bottom:12px;animation:swFI .3s ease;" onmouseenter="this.style.borderColor='rgba(212,168,83,.35)'" onmouseleave="this.style.borderColor='rgba(212,168,83,.15)'"><div style="font-size:10px;color:rgba(200,180,150,.4);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">${f.date}</div>${f.wine?`<div style="margin-bottom:6px;"><span style="font-size:10px;color:#d4a853;letter-spacing:2px;text-transform:uppercase;">🍷 Vino</span><br><span style="font-size:14px;color:#f0e8d8;font-weight:bold;">${f.wine}</span></div>`:''} ${f.food?`<div style="margin-bottom:6px;"><span style="font-size:10px;color:rgba(200,180,150,.5);letter-spacing:2px;text-transform:uppercase;">🍽 Piatto</span><br><span style="font-size:13px;color:#d4c9b5;">${f.food}</span></div>`:''}<div style="font-size:12px;color:rgba(200,180,150,.7);line-height:1.6;font-style:italic;border-top:1px solid rgba(212,168,83,.1);padding-top:8px;margin-top:6px;">${f.explanation}</div><div style="display:flex;gap:8px;margin-top:10px;"><button onclick="SW_V6.delFav(${f.id})" style="flex:1;background:transparent;border:1px solid rgba(200,80,80,.25);color:rgba(200,100,100,.6);padding:7px 0;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:1px;">🗑 Rimuovi</button><button onclick="SW_V6.shareFav(${f.id})" style="flex:1;background:transparent;border:1px solid rgba(212,168,83,.25);color:rgba(212,168,83,.6);padding:7px 0;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:1px;">↗ Condividi</button></div></div>`).join('');
-  }
-
-  function updateBadge() {
-    const b=document.querySelector('#sw-fb'); if(!b) return;
-    const n=F.all().length; b.textContent=n>9?'9+':n; b.style.display=n>0?'flex':'none';
-  }
-
-  function injectFABFavs() {
-    if (document.querySelector('#sw-fav-btn')) return;
-    const btn=document.createElement('button'); btn.id='sw-fav-btn'; btn.title='I miei preferiti';
-    btn.style.cssText='position:fixed;bottom:84px;right:18px;width:52px;height:52px;border-radius:50%;background:#8b2635;border:1px solid rgba(212,168,83,.4);color:#f0e8d8;font-size:22px;cursor:pointer;z-index:9997;box-shadow:0 4px 20px rgba(0,0,0,.5);transition:all .25s;display:flex;align-items:center;justify-content:center;';
-    btn.innerHTML='♥';
-    const bdg=document.createElement('div'); bdg.id='sw-fb';
-    bdg.style.cssText='position:absolute;top:-3px;right:-3px;width:19px;height:19px;border-radius:50%;background:#d4a853;color:#0d0803;font-size:10px;font-weight:bold;display:none;align-items:center;justify-content:center;font-family:Arial,sans-serif;';
-    btn.appendChild(bdg);
-    btn.onmouseenter=()=>{btn.style.transform='scale(1.1)';btn.style.background='#a0303f';};
-    btn.onmouseleave=()=>{btn.style.transform='scale(1)';btn.style.background='#8b2635';};
-    btn.onclick=()=>SW_V6.openFavs();
-    document.body.appendChild(btn);
-    updateBadge();
-  }
-
-  /* ═══════════════════════════════════════════════════════
-     10. WIZARD ABBINAMENTO RAPIDO
-  ═══════════════════════════════════════════════════════ */
-  const STEPS=[
-    {q:'Cosa stai mangiando?',i:'🍽',o:[{l:'🥩 Carne rossa',v:'carne rossa (bistecca, brasato, selvaggina)'},{l:'🐟 Pesce',v:'pesce (branzino, orata, salmone, frutti di mare)'},{l:'🍝 Pasta / Risotto',v:'pasta o risotto (ragù, burro, frutti di mare)'},{l:'🧀 Formaggi',v:'formaggi (stagionati, erborinati, freschi)'},{l:'🥗 Vegetariano',v:'piatto vegetariano (verdure, legumi, cereali)'},{l:'🍰 Dolce',v:'dessert (torta al cioccolato, tiramisù, panna cotta)'}]},
-    {q:'Che corpo preferisci?',i:'🎨',o:[{l:'🌿 Leggero & Fresco',v:'vino leggero, fresco, alta acidità, poco tannino'},{l:'🏋 Strutturato & Potente',v:'vino corposo, tannico, concentrato'},{l:'🥂 Bollicine',v:'spumante o champagne, perlage fine'},{l:'🍯 Morbido & Vellutato',v:'vino morbido, bassa tannicità, finale setoso'}]},
-    {q:'Origine preferita?',i:'🌍',o:[{l:'🇮🇹 Italia',v:'italiano'},{l:'🇫🇷 Francia',v:'francese'},{l:'🌏 Nuovo Mondo',v:'del Nuovo Mondo (Argentina, Cile, USA, Australia)'},{l:'🌍 Qualsiasi',v:'di qualsiasi origine'}]},
-    {q:'Che fascia vuoi?',i:'💶',o:[{l:'🟢 Accessibile — enoteca di quartiere',v:'accessibile, da enoteca o cantina diretta, non cercare etichette rare o famose'},{l:'🟡 Medio — bistrot e trattoria',v:'fascia media, buon rapporto qualità-prezzo, produttori seri ma non blasonati'},{l:'🔴 Importante — serata speciale',v:'fascia alta, grandi produttori, annate ricercate, massima qualità'},{l:'💎 Eccellenza — nessun limite',v:'il meglio assoluto, icone del vino mondiale, nessun compromesso'}]},
-  ];
-  let wz={};
-
-  function buildWizard(){
-    if(document.querySelector('#sw-wiz')) return;
-    const m=document.createElement('div'); m.id='sw-wiz';
-    m.style.cssText='display:none;position:fixed;inset:0;z-index:99999;background:rgba(8,4,1,.92);backdrop-filter:blur(6px);align-items:flex-end;justify-content:center;';
-    m.innerHTML=`<div style="background:#100a04;width:min(560px,100vw);border-radius:16px 16px 0 0;border:1px solid rgba(212,168,83,.2);border-bottom:none;padding:0 0 28px;max-height:92dvh;overflow-y:auto;box-shadow:0 -12px 60px rgba(0,0,0,.8);animation:swFI .35s ease;"><div style="width:40px;height:4px;background:rgba(212,168,83,.3);border-radius:2px;margin:12px auto 0;"></div><div style="padding:18px 22px 14px;border-bottom:1px solid rgba(212,168,83,.1);display:flex;align-items:center;justify-content:space-between;"><div><div style="font-size:15px;color:#d4a853;letter-spacing:2px;text-transform:uppercase;font-family:Georgia,serif;">✦ Abbinamento Rapido</div><div style="font-size:11px;color:rgba(200,180,150,.5);margin-top:2px;letter-spacing:1px;">3 domande · risposta immediata</div></div><button onclick="SW_V6.closeWiz()" style="background:transparent;border:none;color:rgba(200,185,160,.5);font-size:22px;cursor:pointer;padding:2px 8px;line-height:1;">✕</button></div><div style="height:2px;background:rgba(212,168,83,.08);margin:0 22px;"><div id="sw-wb" style="height:100%;width:0;background:#d4a853;transition:width .4s;border-radius:1px;"></div></div><div id="sw-ws" style="padding:22px;"></div><div id="sw-wr" style="display:none;padding:0 22px 8px;"></div></div>`;
-    m.addEventListener('click',e=>{if(e.target===m)SW_V6.closeWiz();});
-    document.body.appendChild(m);
-  }
-
-  function renderStep(i){
-    const s=STEPS[i],bar=document.querySelector('#sw-wb'),step=document.querySelector('#sw-ws'),res=document.querySelector('#sw-wr');
-    if(!step)return;
-    if(bar) bar.style.width=(i/STEPS.length*100)+'%';
-    if(res) res.style.display='none';
-    step.style.animation='none'; step.offsetHeight; step.style.animation='swFI .3s ease';
-    step.innerHTML=`<div style="font-size:10px;color:rgba(212,168,83,.5);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;font-family:Georgia,serif;">PASSO ${i+1} / ${STEPS.length}</div><div style="font-size:19px;color:#f0e8d8;font-family:Georgia,serif;margin-bottom:20px;">${s.i} ${s.q}</div><div style="display:flex;flex-direction:column;gap:10px;">${s.o.map(o=>`<button onclick="SW_V6.wp('${o.v.replace(/'/g,"\\'")}',${i})" style="text-align:left;padding:13px 16px;background:rgba(255,255,255,.04);border:1px solid rgba(212,168,83,.15);border-radius:8px;color:#d4c9b5;font-family:Georgia,serif;font-size:15px;cursor:pointer;min-height:48px;transition:all .2s;" onmouseenter="this.style.background='rgba(212,168,83,.08)';this.style.borderColor='rgba(212,168,83,.4)';this.style.color='#f0e8d8'" onmouseleave="this.style.background='rgba(255,255,255,.04)';this.style.borderColor='rgba(212,168,83,.15)';this.style.color='#d4c9b5'">${o.l}</button>`).join('')}</div>${i>0?`<button onclick="SW_V6.wb(${i})" style="margin-top:14px;background:transparent;border:none;color:rgba(200,180,150,.4);cursor:pointer;font-family:Georgia,serif;font-size:13px;padding:8px 0;">← Indietro</button>`:''}`;
-  }
-
-  async function wizAI(){
-    const step=document.querySelector('#sw-ws'),res=document.querySelector('#sw-wr'),bar=document.querySelector('#sw-wb');
-    if(bar) bar.style.width='100%';
-    if(step) step.innerHTML=`<div style="text-align:center;padding:36px 0;color:rgba(212,168,83,.7);font-family:Georgia,serif;"><div style="font-size:32px;animation:swSpin 2s linear infinite;margin-bottom:14px;">🍷</div><div style="font-size:13px;letter-spacing:2px;text-transform:uppercase;">Il Sommelier sta scegliendo…</div></div>`;
-    const prompt=`Sono al ristorante. Sto mangiando: ${wz.food}. Voglio un ${wz.style}. Preferibilmente ${wz.origin}. Fascia: ${wz.budget||"qualsiasi"}. Suggerisci 2 vini (produttore reale, denominazione, annata consigliata). Per ognuno 1-2 frasi su perché funziona con il piatto. Non citare mai prezzi o cifre nella risposta. Max 220 parole.`;
-    try {
-      const reply=await ask(prompt);
-      if(step) step.innerHTML='';
-      if(res){ res.style.display='block'; res.innerHTML=`<div style="background:rgba(212,168,83,.06);border:1px solid rgba(212,168,83,.2);border-radius:10px;padding:18px;font-family:Georgia,serif;color:#d4c9b5;line-height:1.75;font-size:14px;white-space:pre-line;">${reply.replace(/</g,'&lt;')}</div><div id="sw-wsv"></div><button onclick="SW_V6.openWiz()" style="display:block;width:100%;margin-top:14px;padding:13px;background:transparent;border:1px solid rgba(212,168,83,.25);color:rgba(212,168,83,.7);border-radius:8px;cursor:pointer;font-family:Georgia,serif;font-size:13px;letter-spacing:1.5px;" onmouseenter="this.style.background='rgba(212,168,83,.08)';this.style.color='#d4a853'" onmouseleave="this.style.background='transparent';this.style.color='rgba(212,168,83,.7)'">↺ Nuova Ricerca</button>`; const sv=document.querySelector('#sw-wsv'); if(sv)savBtn(sv,reply,wz.food); }
-    } catch { if(step) step.innerHTML=`<div style="text-align:center;padding:28px;color:rgba(220,100,100,.8);font-family:Georgia,serif;font-size:14px;line-height:1.8;">⚠️ Connessione assente.<br>Riprova tra qualche secondo.<br><br><button onclick="SW_V6.openWiz()" style="background:transparent;border:1px solid rgba(212,168,83,.3);color:#d4a853;padding:10px 24px;border-radius:6px;cursor:pointer;font-family:Georgia,serif;">Riprova</button></div>`; }
-  }
-
-  function injectFABWiz(){
-    if(document.querySelector('#sw-wiz-btn')) return;
-    const b=document.createElement('button'); b.id='sw-wiz-btn';
-    b.style.cssText='position:fixed;bottom:84px;left:18px;background:#1a3a2a;border:1px solid rgba(212,168,83,.35);color:#d4a853;border-radius:28px;padding:0 18px;height:52px;cursor:pointer;z-index:9997;box-shadow:0 4px 20px rgba(0,0,0,.5);display:flex;align-items:center;gap:8px;font-family:Georgia,serif;font-size:13px;letter-spacing:1.5px;transition:all .25s;white-space:nowrap;';
-    b.innerHTML='✦ Abbinamento Rapido';
-    b.onmouseenter=()=>{b.style.background='#243f31';b.style.transform='scale(1.04)';};
-    b.onmouseleave=()=>{b.style.background='#1a3a2a';b.style.transform='scale(1)';};
-    b.onclick=()=>SW_V6.openWiz();
-    document.body.appendChild(b);
-  }
-
-  /* ═══════════════════════════════════════════════════════
-     11. BANNER COLD-START
-  ═══════════════════════════════════════════════════════ */
-  function injectBanner(){
-    if(serverAwake||document.querySelector('#sw-banner')) return;
-    const b=document.createElement('div'); b.id='sw-banner';
-    b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99996;background:rgba(30,15,5,.95);border-bottom:1px solid rgba(212,168,83,.25);padding:8px 16px;text-align:center;font-family:Georgia,serif;font-size:12px;color:rgba(212,168,83,.8);letter-spacing:1.5px;display:flex;align-items:center;justify-content:center;gap:10px;';
-    b.innerHTML='<span style="animation:swSpin 1.5s linear infinite;display:inline-block">⏳</span> Sommelier AI in avvio (server freddo — ~20 secondi)…';
-    document.body.appendChild(b);
-    const chk=setInterval(()=>{ if(serverAwake){b.style.transition='opacity .5s';b.style.opacity='0';setTimeout(()=>b.remove(),600);clearInterval(chk);} },500);
-    setTimeout(()=>{b.remove();clearInterval(chk);},45000);
-  }
-
-  /* ═══════════════════════════════════════════════════════
-     TOAST
-  ═══════════════════════════════════════════════════════ */
-  function toast(msg,type='info'){
-    const bg={info:'#8b5a2b',success:'#2a6635',warning:'#8b6000',error:'#8b2020'};
-    const t=document.createElement('div');
-    t.style.cssText=`position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:${bg[type]||bg.info};color:#f0e8d8;padding:11px 22px;border-radius:8px;z-index:999999;font-family:Georgia,serif;font-size:14px;letter-spacing:1px;box-shadow:0 4px 20px rgba(0,0,0,.4);animation:swFI .3s ease;pointer-events:none;`;
-    t.textContent=msg; document.body.appendChild(t);
-    setTimeout(()=>{t.style.opacity='0';t.style.transition='opacity .4s';},2500);
-    setTimeout(()=>t.remove(),3000);
-  }
-
-  /* ═══════════════════════════════════════════════════════
-     12. API PUBBLICA
-  ═══════════════════════════════════════════════════════ */
-  window.SW_V6 = {
-    openWiz()    { wz={}; buildWizard(); renderStep(0); const m=document.querySelector('#sw-wiz'); if(m){m.style.display='flex';document.body.style.overflow='hidden';} },
-    closeWiz()   { const m=document.querySelector('#sw-wiz'); if(m){m.style.display='none';document.body.style.overflow='';} },
-    wp(v,i)      { const k=['food','style','origin','budget']; wz[k[i]]=v; i+1<STEPS.length?renderStep(i+1):wizAI(); },
-    wb(i)        { renderStep(i-1); },
-    openFavs()   { buildFavPanel(); const p=document.querySelector('#sw-fp'); if(p){p.style.display='flex';document.body.style.overflow='hidden';} },
-    closeFavs()  { const p=document.querySelector('#sw-fp'); if(p){p.style.display='none';document.body.style.overflow='';} },
-    delFav(id)   { F.del(id); renderFavs(); updateBadge(); toast('Rimosso','info'); },
-    clrFavs()    { if(!confirm('Cancellare tutti i preferiti?'))return; F.clr(); renderFavs(); updateBadge(); toast('Cancellati','info'); },
-    shareFav(id) { const f=F.all().find(x=>x.id===id); if(!f)return; const t=`🍷 ${f.wine||'Abbinamento'}\n🍽 ${f.food||''}\n\n${f.explanation}\n\n— sommelierworld.vin`; navigator.share?navigator.share({title:'Abbinamento',text:t}).catch(()=>{}):navigator.clipboard?.writeText(t).then(()=>toast('Copiato ✓','success')); },
-    ask, toast,
-    clrHist()  { hist=[]; sessionStorage.removeItem(LS_HIST); toast('Nuova conversazione ✓','success'); },
-  };
-
-  // Retrocompat v4/v5
-  window.SW_V4 = { callSommelier: ask, clearHistory: window.SW_V6.clrHist };
-  window.SW_V5 = window.SW_V6;
-
-  /* ═══════════════════════════════════════════════════════
+  /* ═══════════════════════════════════════════════
      INIT
-  ═══════════════════════════════════════════════════════ */
-  function init(){
-    console.log('[SW-v6] 🍷 Patch v6 avviata');
-    injectCSS();
-    hookOriginalAI();
-    injectBanner();
+  ═══════════════════════════════════════════════ */
+  function init() {
+    console.log('[SW-v7] 🍷 Patch v7 Premium — avvio');
 
-    let n=0;
-    const run=()=>{
-      injectHero(); injectGallery(); injectTerroirBg();
-      injectFABFavs(); injectFABWiz(); buildWizard(); buildFavPanel();
-      initEvents();
-      fixLogoClick();
-      fixMobileNav();
-      hookQuestionMarks();
-      if(++n<15) setTimeout(run,400);
-      else console.log('[SW-v6] Init completato ✓');
+    loadFonts();
+    injectCSS();
+
+    let n = 0;
+    const run = () => {
+      injectHero();
+      injectQuickGrid();
+      fixLogoNav();
+      injectSectionImages();
+      injectItaliaSection();
+      optimizeHeroMobile();
+      if (++n < 20) setTimeout(run, 350);
+      else console.log('[SW-v7] Init completato ✓');
     };
 
-    document.readyState==='loading'
-      ? document.addEventListener('DOMContentLoaded',run)
+    document.readyState === 'loading'
+      ? document.addEventListener('DOMContentLoaded', run)
       : run();
-  }
 
-
-  /* ═══════════════════════════════════════════════════════
-     FIX: Logo click → Home
-  ═══════════════════════════════════════════════════════ */
-  function fixLogoClick() {
-    // Cerca logo / brand name nella navbar
-    const logo = document.querySelector(
-      '.logo, .brand, .navbar-brand, [class*="logo"], [class*="brand"], ' +
-      'header .title, nav .title, .site-title, .app-name'
-    ) || Array.from(document.querySelectorAll('*')).find(el =>
-      el.children.length < 4 &&
-      /sommelier\s*world/i.test(el.textContent) &&
-      el.offsetHeight < 80
-    );
-
-    if (!logo || logo.dataset.swLogo) return;
-    logo.dataset.swLogo = '1';
-    logo.style.cursor = 'pointer';
-    logo.title = 'Torna alla Home';
-
-    logo.addEventListener('click', e => {
-      e.preventDefault();
-      e.stopPropagation();
-
-      // Metodo 1: click sul tab Home
-      const homeTab = Array.from(document.querySelectorAll('a, button, [data-tab], [onclick]'))
-        .find(el => /^\s*(🏠\s*)?home\s*$/i.test(el.textContent.trim()));
-      if (homeTab) { homeTab.click(); return; }
-
-      // Metodo 2: mostra la sezione #home direttamente
-      const homeSection = document.querySelector('#home, [data-tab="home"], .home-section');
-      if (homeSection) {
-        document.querySelectorAll('section, [data-tab]').forEach(s => s.style.display = 'none');
-        homeSection.style.display = '';
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        return;
-      }
-
-      // Metodo 3: reload sulla root
-      window.location.href = window.location.origin;
-    });
-
-    console.log('[SW-v6] Logo → Home ✓');
-  }
-
-  /* ═══════════════════════════════════════════════════════
-     FIX: Navbar mobile — tutti i tab visibili ed eleganti
-  ═══════════════════════════════════════════════════════ */
-  function fixMobileNav() {
-    const nav = document.querySelector('nav, .nav, .navbar, .tab-bar, [class*="nav-"], [class*="tabs"]');
-    if (!nav || nav.dataset.swNav) return;
-    nav.dataset.swNav = '1';
-
-    // Inietta stile navbar migliorata
-    const style = document.createElement('style');
-    style.id = 'sw-nav-style';
-    style.textContent = `
-      /* ── Navbar container ── */
-      nav, .nav, .navbar, .tab-bar,
-      [class*="nav-bar"], [class*="tab-bar"] {
-        display: flex !important;
-        flex-direction: row !important;
-        overflow-x: auto !important;
-        overflow-y: hidden !important;
-        -webkit-overflow-scrolling: touch !important;
-        scrollbar-width: none !important;
-        -ms-overflow-style: none !important;
-        white-space: nowrap !important;
-        gap: 0 !important;
-        padding: 0 !important;
-        background: rgba(10,5,2,0.97) !important;
-        border-bottom: 1px solid rgba(212,168,83,0.2) !important;
-        position: sticky !important;
-        top: 0 !important;
-        z-index: 9990 !important;
-        backdrop-filter: blur(10px) !important;
-      }
-
-      /* Nascondi scrollbar ma mantieni funzionalità */
-      nav::-webkit-scrollbar,
-      .nav::-webkit-scrollbar,
-      .navbar::-webkit-scrollbar,
-      [class*="tab-bar"]::-webkit-scrollbar {
-        display: none !important;
-      }
-
-      /* ── Ogni tab / voce di navigazione ── */
-      nav a, nav button, nav .tab, nav [data-tab],
-      .nav a, .nav button, .nav .tab,
-      .navbar a, .navbar button,
-      [class*="tab-bar"] a, [class*="tab-bar"] button,
-      [class*="tab-bar"] [class*="tab"] {
-        display: inline-flex !important;
-        flex-direction: column !important;
-        align-items: center !important;
-        justify-content: center !important;
-        flex-shrink: 0 !important;
-        min-width: 64px !important;
-        padding: 8px 10px !important;
-        font-family: Georgia, serif !important;
-        font-size: 9px !important;
-        letter-spacing: 1px !important;
-        text-transform: uppercase !important;
-        color: rgba(200,185,160,0.6) !important;
-        text-decoration: none !important;
-        border: none !important;
-        background: transparent !important;
-        border-bottom: 2px solid transparent !important;
-        transition: color 0.2s, border-color 0.2s !important;
-        cursor: pointer !important;
-        line-height: 1.2 !important;
-        gap: 4px !important;
-      }
-
-      /* Emoji/icona dentro il tab — più grande */
-      nav a .icon, nav button .icon,
-      nav a img, nav button img {
-        font-size: 18px !important;
-        line-height: 1 !important;
-      }
-
-      /* Tab attivo */
-      nav a.active, nav button.active,
-      nav a[class*="active"], nav button[class*="active"],
-      nav a[aria-selected="true"], nav [data-active="true"],
-      .nav a.active, .navbar a.active {
-        color: #d4a853 !important;
-        border-bottom-color: #d4a853 !important;
-      }
-
-      /* Hover */
-      nav a:hover, nav button:hover,
-      .nav a:hover, .navbar a:hover {
-        color: rgba(212,168,83,0.85) !important;
-        background: rgba(212,168,83,0.06) !important;
-      }
-
-      /* ── Brand / Logo nella navbar ── */
-      nav .logo, nav .brand, nav [class*="logo"], nav [class*="brand"],
-      .navbar .logo, .navbar .brand {
-        flex-shrink: 0 !important;
-        padding: 8px 14px !important;
-        font-family: Georgia, serif !important;
-        font-size: 11px !important;
-        letter-spacing: 3px !important;
-        text-transform: uppercase !important;
-        color: #d4a853 !important;
-        border-right: 1px solid rgba(212,168,83,0.15) !important;
-        margin-right: 4px !important;
-        min-width: unset !important;
-        white-space: nowrap !important;
-      }
-
-      /* ── Indicatore "scorri" su mobile ── */
-      @media (max-width: 600px) {
-        nav::after, .navbar::after, [class*="tab-bar"]::after {
-          content: '' !important;
-          position: sticky !important;
-          right: 0 !important;
-          top: 0 !important;
-          width: 24px !important;
-          height: 100% !important;
-          flex-shrink: 0 !important;
-          background: linear-gradient(to right, transparent, rgba(10,5,2,0.9)) !important;
-          pointer-events: none !important;
-        }
-      }
-    `;
-
-    // Rimuovi stile precedente se esiste
-    document.querySelector('#sw-nav-style')?.remove();
-    document.head.appendChild(style);
-
-    console.log('[SW-v6] Mobile nav fix ✓');
-  }
-
-
-  /* ═══════════════════════════════════════════════════════
-     FIX: Tooltip ? — spiegazioni termini enologici
-  ═══════════════════════════════════════════════════════ */
-  const GLOSSARIO = {
-    'acidit':    { titolo: 'Acidità', emoji: '🍋', testo: 'È la "spina dorsale" del vino. Alta acidità = vino fresco, vivace, che pulisce il palato. Bassa acidità = vino morbido, rotondo. I vini da pesce vogliono alta acidità; quelli da carne rossa la tollerano bassa.' },
-    'morbidezz': { titolo: 'Morbidezza', emoji: '🍯', testo: 'La sensazione vellutata in bocca, opposta alla durezza dei tannini. Un vino morbido avvolge il palato. Dipende da alcol, zuccheri residui e dall\'invecchiamento. Perfetto con piatti delicati e grassi.' },
-    'sapidit':   { titolo: 'Sapidità', emoji: '🌊', testo: 'La "salinità" del vino — quella sensazione minerale, quasi di brezza marina, che stimola la salivazione. Alta sapidità nei vini da suoli vulcanici o costieri (Vermentino, Assyrtiko). Esalta i sapori del cibo.' },
-    'struttur':  { titolo: 'Struttura', emoji: '🏛', testo: 'La "corporatura" del vino: quanto riempie la bocca. Un vino strutturato è denso, concentrato, persistente. Un vino leggero è agile e beverino. La struttura deve essere proporzionata al piatto: carne brasata vuole struttura, carpaccio no.' },
-    'tannin':    { titolo: 'Tannini', emoji: '🍇', testo: 'I polifenoli della buccia dell\'uva che danno quella sensazione di "astringenza" — come mordersi l\'interno della guancia. Presenti nei rossi, quasi assenti nei bianchi. Con il tempo si ammorbidiscono. Aiutano ad abbinare carni grasse e formaggi stagionati.' },
-    'compless':  { titolo: 'Complessità', emoji: '🌀', testo: 'Quante sfaccettature riesce a mostrare un vino al naso e in bocca. Un vino complesso evolve: cambia al naso, offre profumi diversi a ogni sorso. Frutta, spezie, terra, fiori, tabacco — tutti insieme. È il segno dei grandi vini e delle grandi annate.' },
-  };
-
-  function findGlossarioKey(text) {
-    const t = text.toLowerCase().replace(/[àáâã]/g,'a').replace(/[èéê]/g,'e').replace(/[ìí]/g,'i').replace(/[òó]/g,'o').replace(/[ùú]/g,'u');
-    return Object.keys(GLOSSARIO).find(k => t.includes(k));
-  }
-
-  let activeTooltip = null;
-
-  function showTooltip(btn, key) {
-    // Chiudi tooltip aperto
-    if (activeTooltip) { activeTooltip.remove(); activeTooltip = null; }
-
-    const info = GLOSSARIO[key];
-    if (!info) return;
-
-    const tip = document.createElement('div');
-    tip.style.cssText = `
-      position: fixed;
-      z-index: 999990;
-      background: #1a0e05;
-      border: 1px solid rgba(212,168,83,0.45);
-      border-radius: 10px;
-      padding: 14px 16px;
-      max-width: min(300px, 88vw);
-      box-shadow: 0 8px 32px rgba(0,0,0,0.7);
-      animation: swFI 0.2s ease;
-      font-family: Georgia, serif;
-    `;
-
-    tip.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-        <span style="font-size:22px;">${info.emoji}</span>
-        <div>
-          <div style="font-size:13px;color:#d4a853;letter-spacing:2px;text-transform:uppercase;">${info.titolo}</div>
-          <div style="font-size:10px;color:rgba(200,180,150,0.4);letter-spacing:1px;">Glossario Sommelier</div>
-        </div>
-        <button style="margin-left:auto;background:transparent;border:none;color:rgba(200,185,160,0.5);font-size:18px;cursor:pointer;padding:0 4px;line-height:1;" onclick="this.closest('[data-tip]').remove()">✕</button>
-      </div>
-      <div style="font-size:13px;color:#d4c9b5;line-height:1.7;">${info.testo}</div>
-    `;
-    tip.setAttribute('data-tip', '1');
-
-    document.body.appendChild(tip);
-    activeTooltip = tip;
-
-    // Posiziona vicino al bottone
-    const rect = btn.getBoundingClientRect();
-    const tipW = 300;
-    const tipH = 160;
-
-    let left = rect.left;
-    let top  = rect.bottom + 8;
-
-    // Non uscire a destra
-    if (left + tipW > window.innerWidth - 12) left = window.innerWidth - tipW - 12;
-    if (left < 12) left = 12;
-
-    // Non uscire in basso
-    if (top + tipH > window.innerHeight - 12) top = rect.top - tipH - 8;
-
-    tip.style.left = left + 'px';
-    tip.style.top  = top + 'px';
-
-    // Chiudi toccando fuori
-    setTimeout(() => {
-      document.addEventListener('click', function handler(e) {
-        if (!tip.contains(e.target) && e.target !== btn) {
-          tip.remove();
-          if (activeTooltip === tip) activeTooltip = null;
-          document.removeEventListener('click', handler);
-        }
-      });
-    }, 100);
-  }
-
-  function hookQuestionMarks() {
-    // Cerca tutti i ? nella pagina
-    document.querySelectorAll('*').forEach(el => {
-      if (el.dataset.swTip) return;
-      if (el.children.length > 2) return;
-      const txt = el.textContent.trim();
-      if (txt !== '?' && !el.classList.toString().includes('help') && !el.title?.includes('?')) return;
-
-      // Trova il termine enologico vicino: guarda il label/testo del parent
-      const parent = el.closest('[class], section, div') || el.parentElement;
-      const context = parent?.textContent || '';
-      const key = findGlossarioKey(context);
-      if (!key) return;
-
-      el.dataset.swTip = '1';
-      el.style.cssText += `
-        cursor: pointer !important;
-        width: 22px !important; height: 22px !important;
-        border-radius: 50% !important;
-        background: rgba(212,168,83,0.15) !important;
-        border: 1px solid rgba(212,168,83,0.4) !important;
-        color: #d4a853 !important;
-        font-size: 12px !important;
-        display: inline-flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        transition: background 0.2s !important;
-        font-family: Georgia, serif !important;
-        flex-shrink: 0 !important;
-      `;
-      el.addEventListener('mouseenter', () => { el.style.background = 'rgba(212,168,83,0.3)'; });
-      el.addEventListener('mouseleave', () => { el.style.background = 'rgba(212,168,83,0.15)'; });
-      el.addEventListener('click', e => { e.stopPropagation(); showTooltip(el, key); });
-    });
+    window.addEventListener('resize', optimizeHeroMobile);
   }
 
   init();
-  wakeServer(); // ping immediato
 
 })();
