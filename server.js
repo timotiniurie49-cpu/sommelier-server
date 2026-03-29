@@ -1,31 +1,30 @@
 const express = require('express');
 const cors = require('cors');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-require('dotenv').config();
 
 const app = express();
+const PORT = process.env.PORT || 8080; // Railway usa spesso la 8080
+
+// Inizializza Gemini
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
 app.use(cors());
 app.use(express.json());
 
-// Inizializza Gemini con la tua chiave
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// Accetta sia /api/chat che /api/groq per non rompere il sito
 app.post(['/api/chat', '/api/groq'], async (req, res) => {
-    try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        // Prende il messaggio in qualunque formato arrivi dall'HTML
-        const prompt = req.body.userMsg || req.body.message || req.body.prompt || "Ciao";
-        
-        const result = await model.generateContent(prompt);
-        const text = result.response.text();
-        
-        // Risponde nel formato 'text' che il tuo index.html si aspetta
-        res.json({ text: text }); 
-    } catch (error) {
-        console.error("Errore:", error);
-        res.status(500).json({ error: "Il Sommelier è in pausa." });
-    }
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const prompt = req.body.userMsg || req.body.message || "Ciao";
+    
+    const result = await model.generateContent(prompt);
+    res.json({ text: result.response.text() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log("Server Online"));
+app.listen(PORT, () => {
+  console.log('--- SERVER AGGIORNATO ---');
+  console.log('Motore attuale: GEMINI');
+  console.log('Porta: ' + PORT);
+});
