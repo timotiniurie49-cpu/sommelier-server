@@ -1,7 +1,6 @@
 {
-  "name": "sommelier-world-server",
+  "name": "sommelier-server",
   "version": "1.0.0",
-  "description": "Sommelier World Backend con Gemini",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
