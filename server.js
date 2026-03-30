@@ -5,39 +5,46 @@ require('dotenv').config();
 
 const app = express();
 
-// --- CONFIGURAZIONE CORS BLOCCANTE ---
-app.use(cors({
-    origin: '*', // Permette a QUALSIASI sito di interrogare il server
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
+// Middleware obbligatori
+app.use(cors());
 app.use(express.json());
 
-const key = process.env.GEMINI_API_KEY;
-const genAI = new GoogleGenerativeAI(key);
+const PORT = process.env.PORT || 8080;
+const API_KEY = process.env.GEMINI_API_KEY;
 
-// Rotta per i test
+// Verifica la chiave all'avvio
+if (!API_KEY) {
+    console.error("❌ ERRORE CRITICO: GEMINI_API_KEY non trovata nelle variabili!");
+}
+
+const genAI = new GoogleGenerativeAI(API_KEY || "");
+
+// Test rapido del server
 app.get('/', (req, res) => {
-    res.json({ status: "online", message: "Sommelier Server v5.0.6 pronto" });
+    res.status(200).send("Server Sommelier Online v5.0.8");
 });
 
-// Rotta per la chat
+// Gestione della chat
 app.post(['/api/chat', '/api/groq'], async (req, res) => {
     try {
+        if (!API_KEY) throw new Error("API Key mancante sul server");
+
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const userPrompt = req.body.userMsg || req.body.message || req.body.prompt || "Ciao";
 
         const result = await model.generateContent(userPrompt);
         const response = await result.response;
-        
-        // Risposta pulita
-        res.status(200).json({ text: response.text() });
+        const text = response.text();
+
+        res.json({ text: text });
+
     } catch (error) {
-        console.error("Errore:", error.message);
-        res.status(500).json({ error: "Errore tecnico del Sommelier." });
+        console.error("Errore API Gemini:", error.message);
+        res.status(500).json({ error: "Il Sommelier è temporaneamente offline." });
     }
 });
 
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log('Server pronto'));
+// Avvio server
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`✅ Server in ascolto sulla porta ${PORT}`);
+});
