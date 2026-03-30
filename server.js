@@ -31,7 +31,7 @@ app.post(['/api/chat', '/api/groq'], async (req, res) => {
     try {
         if (!key) throw new Error("Chiave API non configurata sul server");
         
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+       const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro";
         const prompt = req.body.userMsg || req.body.message || req.body.prompt || "Ciao";
         const result = await model.generateContent(prompt);
         res.json({ text: result.response.text() });
