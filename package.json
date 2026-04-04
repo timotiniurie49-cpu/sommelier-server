@@ -1,11 +1,9 @@
 {
   "name": "sommelier-server",
-  "version": "7.3.0",
+  "version": "7.4.0",
   "description": "Backend Sommelier World",
   "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
+  "scripts": { "start": "node server.js" },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
     "cors": "^2.8.5",
@@ -14,8 +12,5 @@
     "node-cron": "^3.0.3",
     "nodemailer": "^6.9.9"
   },
-  "engines": {
-    "node": ">=18.0.0"
-  },
-  "license": "ISC"
+  "engines": { "node": ">=18.0.0" }
 }
