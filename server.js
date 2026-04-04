@@ -1,35 +1,50 @@
 /**
- * ╔══════════════════════════════════════════════════════════════════╗
- * ║  SOMMELIER WORLD — Server v7.3 DEFINITIVO                      ║
- * ║                                                                  ║
- * ║  ✓ Email Nodemailer via Gmail — FUNZIONANTE                    ║
- * ║  ✓ AI: Groq primario + Gemini fallback                         ║
- * ║  ✓ Articoli AI giornalieri (notizie reali + editoriali)        ║
- * ║  ✓ Log chiari in Railway Logs per ogni operazione              ║
- * ║                                                                  ║
- * ║  RAILWAY VARIABLES obbligatorie:                               ║
- * ║    GROQ_API_KEY   = gsk_...      (console.groq.com)            ║
- * ║    GEMINI_API_KEY = AIza...      (facoltativo, fallback)       ║
- * ║    SMTP_USER      = tuagmail@gmail.com  ← GMAIL, non alias!    ║
- * ║    SMTP_PASS      = xxxx xxxx xxxx xxxx (App Password Gmail)   ║
- * ║    ADMIN_EMAIL    = timotiniurie49@gmail.com (dove ricevi)     ║
- * ║    ADMIN_SECRET   = parola_segreta_tua (per admin panel)       ║
- * ╚══════════════════════════════════════════════════════════════════╝
+ * SOMMELIER WORLD — Server v7.4 STABILE
+ * ✓ Non crasha mai — tutte le dipendenze opzionali
+ * ✓ Groq primario + Gemini fallback
+ * ✓ Email Nodemailer Gmail
+ * ✓ Articoli AI giornalieri
+ *
+ * RAILWAY VARIABLES:
+ *   GROQ_API_KEY   = gsk_...
+ *   GEMINI_API_KEY = AIza...
+ *   GEMINI_MODEL   = gemini-2.0-flash
+ *   SMTP_USER      = tuagmail@gmail.com   ← Gmail vero, non alias
+ *   SMTP_PASS      = xxxx xxxx xxxx xxxx  ← App Password Gmail
+ *   ADMIN_EMAIL    = timotiniurie49@gmail.com
+ *   ADMIN_SECRET   = parola_segreta
  */
 'use strict';
 
-const express    = require('express');
-const cors       = require('cors');
-const https      = require('https');
-const http       = require('http');
-const fs         = require('fs');
-const nodemailer = require('nodemailer');
-require('dotenv').config();
+// ── Import sicuri ─────────────────────────────────────────
+const express = require('express');
+const cors    = require('cors');
+const https   = require('https');
+const http    = require('http');
+const fs      = require('fs');
 
+// Dipendenze opzionali — non crashano se mancano
+let nodemailer = null;
+try { nodemailer = require('nodemailer'); } catch(e) {
+  console.warn('[Boot] nodemailer non disponibile — email disabilitata');
+}
+
+let nodeCron = null;
+try { nodeCron = require('node-cron'); } catch(e) {
+  console.warn('[Boot] node-cron non disponibile — cron disabilitato');
+}
+
+let GoogleGenerativeAI = null;
+try { GoogleGenerativeAI = require('@google/generative-ai').GoogleGenerativeAI; } catch(e) {
+  console.warn('[Boot] @google/generative-ai non disponibile');
+}
+
+try { require('dotenv').config(); } catch(e) {}
+
+// ── Config ────────────────────────────────────────────────
 const app  = express();
 const PORT = process.env.PORT || 8080;
 
-// ── Variabili ────────────────────────────────────────────
 const GROQ_KEY     = process.env.GROQ_API_KEY   || '';
 const GEMINI_KEY   = process.env.GEMINI_API_KEY  || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL    || 'gemini-2.0-flash';
@@ -41,192 +56,126 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET    || 'sommelier2026';
 app.use(cors());
 app.use(express.json({ limit: '4mb' }));
 
-// ── Contatore chiamate AI ─────────────────────────────────
-let callCount = 0, lastReset = Date.now();
+let callCount = 0;
+let lastReset = Date.now();
 
 
-/* ════════════════════════════════════════════════════════
-   EMAIL — Nodemailer con Gmail
-   ════════════════════════════════════════════════════════ */
-
-// Crea transporter Gmail
-// IMPORTANTE: SMTP_USER deve essere l'email Gmail VERA
-// (es. timotiniurie49@gmail.com) NON l'alias di dominio
-function createTransporter() {
-  if (!SMTP_USER || !SMTP_PASS) {
-    console.warn('[Email] ⚠ SMTP_USER o SMTP_PASS non configurati su Railway');
-    return null;
-  }
+/* ═══════════════════════════════════════════════════════
+   EMAIL
+   ═══════════════════════════════════════════════════════ */
+function getTransporter() {
+  if (!nodemailer || !SMTP_USER || !SMTP_PASS) return null;
   return nodemailer.createTransporter({
-    host:   'smtp.gmail.com',
-    port:   587,
-    secure: false,
-    auth: {
-      user: SMTP_USER,
-      pass: SMTP_PASS,    // App Password Gmail (16 caratteri senza spazi)
-    },
+    host: 'smtp.gmail.com', port: 587, secure: false,
+    auth: { user: SMTP_USER, pass: SMTP_PASS },
     tls: { rejectUnauthorized: false },
   });
 }
 
-// Test connessione email all'avvio
-async function testEmail() {
-  if (!SMTP_USER || !SMTP_PASS) {
-    console.log('[Email] ✗ Non configurato (aggiungi SMTP_USER e SMTP_PASS su Railway)');
-    return false;
-  }
-  try {
-    const t = createTransporter();
-    await t.verify();
-    console.log('[Email] ✓ Connessione Gmail OK — pronto a inviare');
-    return true;
-  } catch(e) {
-    console.error('[Email] ✗ Errore connessione Gmail:', e.message);
-    console.error('[Email] Controlla: SMTP_USER = indirizzo Gmail VERO (non alias)');
-    console.error('[Email] Controlla: SMTP_PASS = App Password di 16 caratteri');
-    return false;
-  }
-}
-
-// Invia email di notifica all'admin quando arriva un contatto
 async function sendContactEmail(name, email, subject, message) {
-  const t = createTransporter();
+  const t = getTransporter();
   if (!t) {
-    console.log('[Email] Skip invio — transporter non disponibile');
+    console.log('[Email] Non configurata — log: ' + name + ' <' + email + '>');
     return false;
   }
-
-  const htmlAdmin = `
-    <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;background:#fafaf8;padding:30px;border-radius:8px;">
-      <div style="border-bottom:2px solid #8B6914;padding-bottom:16px;margin-bottom:20px;">
-        <h2 style="color:#1a0a02;font-size:1.3rem;margin:0;">🍷 Nuovo messaggio — Sommelier World</h2>
-      </div>
-      <table style="width:100%;border-collapse:collapse;">
-        <tr>
-          <td style="padding:8px 0;color:#666;font-size:.85rem;width:100px;">Da:</td>
-          <td style="padding:8px 0;color:#1a0a02;font-weight:600;">${name}</td>
-        </tr>
-        <tr>
-          <td style="padding:8px 0;color:#666;font-size:.85rem;">Email:</td>
-          <td style="padding:8px 0;"><a href="mailto:${email}" style="color:#8B6914;">${email}</a></td>
-        </tr>
-        <tr>
-          <td style="padding:8px 0;color:#666;font-size:.85rem;">Oggetto:</td>
-          <td style="padding:8px 0;color:#1a0a02;">${subject || '—'}</td>
-        </tr>
-      </table>
-      <div style="margin-top:20px;padding:16px;background:#fff;border-left:3px solid #8B6914;border-radius:0 6px 6px 0;">
-        <p style="color:#1a0a02;font-size:1rem;line-height:1.8;margin:0;white-space:pre-wrap;">${message}</p>
-      </div>
-      <div style="margin-top:20px;text-align:right;">
-        <a href="mailto:${email}?subject=Re: ${encodeURIComponent(subject||'Messaggio')}"
-           style="display:inline-block;padding:10px 20px;background:#8B6914;color:#fff;text-decoration:none;border-radius:5px;font-size:.85rem;">
-          ↩ Rispondi a ${name}
-        </a>
-      </div>
-      <p style="margin-top:24px;color:#aaa;font-size:.75rem;text-align:center;">
-        sommelierworld.vin · ${new Date().toLocaleString('it-IT')}
-      </p>
-    </div>
-  `;
-
-  // Email di conferma al mittente
-  const htmlConfirm = `
-    <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;background:#0A0705;padding:30px;border-radius:8px;color:#F5EFE2;">
-      <div style="text-align:center;padding-bottom:20px;border-bottom:1px solid rgba(212,175,55,.3);margin-bottom:20px;">
-        <div style="font-size:1.5rem;margin-bottom:6px;">🍷</div>
-        <h2 style="color:#D4AF37;font-size:1.1rem;letter-spacing:3px;margin:0;">SOMMELIER WORLD</h2>
-      </div>
-      <p style="font-size:1rem;line-height:1.8;color:rgba(245,239,226,.85);">
-        Caro ${name},<br><br>
-        Grazie per averci scritto. Abbiamo ricevuto il tuo messaggio e ti risponderemo entro 48 ore.
-      </p>
-      <div style="margin:20px 0;padding:14px;background:rgba(212,175,55,.08);border:1px solid rgba(212,175,55,.2);border-radius:6px;">
-        <p style="margin:0;font-size:.85rem;color:rgba(245,239,226,.55);font-style:italic;">"${message.substring(0, 150)}${message.length > 150 ? '…' : ''}"</p>
-      </div>
-      <p style="font-size:.9rem;color:rgba(245,239,226,.6);line-height:1.7;">
-        Con piacere,<br>
-        <strong style="color:#D4AF37;">Il Team di Sommelier World</strong><br>
-        <a href="mailto:info@sommelierworld.vin" style="color:rgba(212,175,55,.6);text-decoration:none;">info@sommelierworld.vin</a>
-      </p>
-      <p style="margin-top:20px;font-size:.72rem;color:rgba(245,239,226,.2);text-align:center;border-top:1px solid rgba(212,175,55,.1);padding-top:16px;">
-        © 2026 Sommelier World · sommelierworld.vin
-      </p>
-    </div>
-  `;
-
   try {
-    // 1. Notifica admin
+    // Email all'admin
     await t.sendMail({
-      from:    `"Sommelier World" <${SMTP_USER}>`,
+      from:    '"Sommelier World" <' + SMTP_USER + '>',
       to:      ADMIN_EMAIL,
-      replyTo: `"${name}" <${email}>`,
-      subject: `[SW Contatti] ${subject || 'Nuovo messaggio da ' + name}`,
-      html:    htmlAdmin,
+      replyTo: '"' + name + '" <' + email + '>',
+      subject: '[SW] ' + (subject || 'Messaggio da ' + name),
+      html: [
+        '<div style="font-family:Georgia,serif;max-width:580px;padding:24px;background:#fafaf8;border-radius:8px;">',
+        '<h2 style="color:#1a0a02;border-bottom:2px solid #8B6914;padding-bottom:12px;margin-bottom:18px;">',
+        '🍷 Nuovo messaggio — Sommelier World</h2>',
+        '<p><strong>Da:</strong> ' + name + '</p>',
+        '<p><strong>Email:</strong> <a href="mailto:' + email + '">' + email + '</a></p>',
+        '<p><strong>Oggetto:</strong> ' + (subject || '—') + '</p>',
+        '<div style="margin-top:16px;padding:14px;background:#fff;border-left:3px solid #8B6914;">',
+        '<p style="white-space:pre-wrap;margin:0;">' + message + '</p></div>',
+        '<p style="margin-top:18px;"><a href="mailto:' + email + '?subject=Re: ' + encodeURIComponent(subject || '') + '"',
+        ' style="background:#8B6914;color:#fff;padding:10px 18px;text-decoration:none;border-radius:5px;">',
+        '↩ Rispondi a ' + name + '</a></p>',
+        '<p style="color:#aaa;font-size:.75rem;margin-top:20px;">',
+        new Date().toLocaleString('it-IT') + ' · sommelierworld.vin</p>',
+        '</div>'
+      ].join(''),
     });
-    console.log(`[Email] ✓ Notifica admin inviata a ${ADMIN_EMAIL}`);
+    console.log('[Email] ✓ Notifica admin inviata a ' + ADMIN_EMAIL);
 
-    // 2. Conferma al mittente
+    // Conferma al mittente
     await t.sendMail({
-      from:    `"Sommelier World" <${SMTP_USER}>`,
-      to:      `"${name}" <${email}>`,
-      subject: 'Sommelier World — Abbiamo ricevuto il tuo messaggio',
-      html:    htmlConfirm,
+      from:    '"Sommelier World" <' + SMTP_USER + '>',
+      to:      '"' + name + '" <' + email + '>',
+      subject: 'Sommelier World — Messaggio ricevuto',
+      html: [
+        '<div style="font-family:Georgia,serif;max-width:580px;padding:24px;background:#0A0705;border-radius:8px;color:#F5EFE2;">',
+        '<div style="text-align:center;padding-bottom:18px;border-bottom:1px solid rgba(212,175,55,.3);margin-bottom:18px;">',
+        '<div style="font-size:1.4rem;">🍷</div>',
+        '<h2 style="color:#D4AF37;font-size:1rem;letter-spacing:3px;margin:8px 0 0;">SOMMELIER WORLD</h2></div>',
+        '<p style="line-height:1.8;">Caro ' + name + ',<br><br>',
+        'Grazie per averci scritto. Abbiamo ricevuto il tuo messaggio e ti risponderemo entro 48 ore.</p>',
+        '<div style="margin:18px 0;padding:12px;background:rgba(212,175,55,.08);border:1px solid rgba(212,175,55,.2);border-radius:6px;">',
+        '<p style="font-style:italic;color:rgba(245,239,226,.6);margin:0;font-size:.9rem;">',
+        '"' + message.substring(0, 120) + (message.length > 120 ? '…' : '') + '"</p></div>',
+        '<p style="color:rgba(245,239,226,.6);font-size:.9rem;">Il Team di Sommelier World<br>',
+        '<a href="mailto:info@sommelierworld.vin" style="color:rgba(212,175,55,.6);">info@sommelierworld.vin</a></p>',
+        '<p style="font-size:.7rem;color:rgba(245,239,226,.2);margin-top:18px;border-top:1px solid rgba(212,175,55,.1);padding-top:14px;text-align:center;">',
+        '© 2026 Sommelier World · sommelierworld.vin</p></div>'
+      ].join(''),
     });
-    console.log(`[Email] ✓ Conferma inviata a ${email}`);
-
+    console.log('[Email] ✓ Conferma inviata a ' + email);
     return true;
+
   } catch(e) {
-    console.error('[Email] ✗ Errore invio:', e.message);
-    // Log dettagliato per debug
+    console.error('[Email] ✗ Errore:', e.message);
     if (e.code === 'EAUTH') {
-      console.error('[Email] → Problema autenticazione. Controlla App Password Gmail.');
-      console.error('[Email] → SMTP_USER deve essere l\'email Gmail, non l\'alias di dominio');
+      console.error('[Email] → SMTP_USER deve essere email Gmail vera (non alias di dominio)');
+      console.error('[Email] → SMTP_PASS deve essere App Password Gmail (16 chars)');
     }
     return false;
   }
 }
 
 
-/* ════════════════════════════════════════════════════════
-   AI — Groq + Gemini fallback
-   ════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════
+   AI — Groq + Gemini
+   ═══════════════════════════════════════════════════════ */
 function callGroq(prompt, maxTokens) {
   return new Promise(function(resolve, reject) {
+    if (!GROQ_KEY) return reject(new Error('GROQ_API_KEY mancante'));
     const body = JSON.stringify({
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: maxTokens || 1200,
-      temperature: 0.75,
+      max_tokens: maxTokens || 1200, temperature: 0.75,
     });
     const req = https.request({
-      hostname: 'api.groq.com',
-      path:     '/openai/v1/chat/completions',
-      method:   'POST',
+      hostname: 'api.groq.com', path: '/openai/v1/chat/completions',
+      method: 'POST',
       headers: {
-        'Content-Type':   'application/json',
-        'Authorization':  'Bearer ' + GROQ_KEY,
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + GROQ_KEY,
         'Content-Length': Buffer.byteLength(body),
-      },
+      }
     }, function(res) {
-      let d = '';
-      res.on('data', c => d += c);
+      let d = ''; res.on('data', c => d += c);
       res.on('end', function() {
         try {
           const j = JSON.parse(d);
-          if (j.choices?.[0]) resolve(j.choices[0].message.content);
-          else reject(new Error(j.error?.message || 'Groq: risposta vuota'));
-        } catch(e) { reject(new Error('Groq: errore parsing')); }
+          if (j.choices && j.choices[0]) resolve(j.choices[0].message.content);
+          else reject(new Error((j.error && j.error.message) || 'Groq: risposta vuota'));
+        } catch(e) { reject(new Error('Groq: parsing error')); }
       });
     });
     req.on('error', e => reject(new Error('Groq network: ' + e.message)));
-    req.setTimeout(45000, () => { req.destroy(); reject(new Error('Groq timeout')); });
+    req.setTimeout(45000, function() { req.destroy(); reject(new Error('Groq timeout')); });
     req.write(body); req.end();
   });
 }
 
 async function callGemini(prompt) {
-  const { GoogleGenerativeAI } = require('@google/generative-ai');
+  if (!GoogleGenerativeAI || !GEMINI_KEY) throw new Error('Gemini non configurato');
   const genAI = new GoogleGenerativeAI(GEMINI_KEY);
   const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
   const result = await model.generateContent(prompt);
@@ -240,54 +189,70 @@ async function callAI(system, userMsg, maxTokens) {
 
   if (GROQ_KEY) {
     try {
-      console.log(`[AI] Chiamata API inviata → Groq (#${callCount})`);
-      const t = await callGroq(prompt, maxTokens);
-      console.log('[AI] Groq OK');
-      return t;
+      console.log('[AI] Chiamata API inviata → Groq (#' + callCount + ')');
+      const text = await callGroq(prompt, maxTokens);
+      console.log('[AI] Groq OK — ' + text.length + ' chars');
+      return text;
     } catch(e) {
-      console.warn('[Groq]', e.message);
+      console.warn('[Groq] Errore:', e.message);
       if (!GEMINI_KEY) throw e;
       console.log('[AI] Fallback → Gemini');
     }
   }
+
   if (GEMINI_KEY) {
-    console.log(`[AI] Chiamata API inviata → Gemini (#${callCount})`);
-    return await callGemini(prompt);
+    console.log('[AI] Chiamata API inviata → Gemini (#' + callCount + ')');
+    const text = await callGemini(prompt);
+    console.log('[AI] Gemini OK');
+    return text;
   }
-  throw new Error('Nessun provider AI configurato.');
+
+  throw new Error('Nessun provider AI. Aggiungi GROQ_API_KEY su Railway → Variables.');
 }
 
 
-/* ════════════════════════════════════════════════════════
-   ARTICOLI — storage + generazione
-   ════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════
+   ARTICOLI
+   ═══════════════════════════════════════════════════════ */
 const ARTICLES_FILE = '/tmp/sw_articles.json';
 let articlesStore = [];
 
 const SEED_ARTICLES = [
   {
-    id:'seed-1', type:'editorial', isNews:false,
-    titolo_it:'Barolo 2016: la Vendemmia del Secolo',
-    titolo_en:'Barolo 2016: The Vintage of the Century',
-    titolo_fr:'Barolo 2016 : le Millésime du Siècle',
-    categoria_it:'Annate', categoria_en:'Vintages', categoria_fr:'Millésimes',
-    testo_it:'Il 2016 è considerato l\'annata più grande delle Langhe degli ultimi trent\'anni. Estate perfetta, escursioni termiche straordinarie, acidità cristallina.\n\nI Barolo 2016 del Monfortino di Giacomo Conterno, del Rocche dell\'Annunziata di Paolo Scavino, del Cerretta di Elio Grasso sono vini destinati a durare cinquant\'anni.\n\nSe trovi un 2016 a prezzo ragionevole, compralo senza esitare.',
-    testo_en:'The 2016 vintage is the greatest in the Langhe for thirty years. Perfect summer, extraordinary temperature variations, crystalline acidity. These wines will last fifty years.',
-    testo_fr:'Le millésime 2016 est le plus grand des Langhe depuis trente ans. Des tanins soyeux et une acidité cristalline — ces vins dureront cinquante ans.',
-    immagine:'https://images.pexels.com/photos/4113579/pexels-photo-4113579.jpeg?auto=compress&w=900',
-    autore:'Timotin', data:'Aprile 2026', generato_ai:false,
+    id: 'seed-1', type: 'editorial', isNews: false,
+    titolo_it: 'Barolo 2016: la Vendemmia del Secolo',
+    titolo_en: 'Barolo 2016: The Vintage of the Century',
+    titolo_fr: 'Barolo 2016 : le Millésime du Siècle',
+    categoria_it: 'Annate', categoria_en: 'Vintages', categoria_fr: 'Millésimes',
+    testo_it: 'Il 2016 è considerato l\'annata più grande delle Langhe degli ultimi trent\'anni. Estate perfetta, escursioni termiche straordinarie, acidità cristallina.\n\nI Barolo 2016 — il Monfortino di Giacomo Conterno, il Rocche dell\'Annunziata di Paolo Scavino, il Cerretta di Elio Grasso — sono capolavori destinati a durare cinquant\'anni.\n\nSe ne trovi ancora in vendita a prezzo ragionevole, compralo senza esitare.',
+    testo_en: 'The 2016 vintage is the greatest in the Langhe for thirty years. Perfect summer, extraordinary temperature variations, crystalline acidity. These wines will last fifty years.',
+    testo_fr: 'Le millésime 2016 est le plus grand des Langhe depuis trente ans. Tanins soyeux, acidité cristalline — ces vins dureront cinquante ans.',
+    immagine: 'https://images.pexels.com/photos/4113579/pexels-photo-4113579.jpeg?auto=compress&w=900',
+    autore: 'Timotin', data: 'Aprile 2026', generato_ai: false,
   },
   {
-    id:'seed-2', type:'editorial', isNews:false,
-    titolo_it:'Come Leggere un\'Etichetta del Vino',
-    titolo_en:'How to Read a Wine Label',
-    titolo_fr:'Comment Lire une Étiquette de Vin',
-    categoria_it:'Tecnica', categoria_en:'Technique', categoria_fr:'Technique',
-    testo_it:'DOC, DOCG, IGT, AOC: capire il sistema di classificazione ti permette di scegliere il vino giusto in pochi secondi.\n\nLa regola d\'oro: guarda il nome del produttore prima della denominazione. Un grande produttore in una denominazione minore batte spesso un produttore mediocre in una grande denominazione.\n\nL\'annata è il secondo elemento da guardare: cambia radicalmente il carattere del vino ogni anno.',
-    testo_en:'Understanding wine classification lets you choose the right bottle in seconds. The golden rule: look at the producer\'s name before the appellation.',
-    testo_fr:'Comprendre la classification vous permet de choisir le bon vin en quelques secondes.',
-    immagine:'https://images.pexels.com/photos/3850838/pexels-photo-3850838.jpeg?auto=compress&w=900',
-    autore:'Timotin', data:'Aprile 2026', generato_ai:false,
+    id: 'seed-2', type: 'editorial', isNews: false,
+    titolo_it: 'Come Leggere un\'Etichetta del Vino',
+    titolo_en: 'How to Read a Wine Label',
+    titolo_fr: 'Comment Lire une Étiquette de Vin',
+    categoria_it: 'Tecnica', categoria_en: 'Technique', categoria_fr: 'Technique',
+    testo_it: 'DOC, DOCG, IGT, AOC: capire il sistema di classificazione ti permette di scegliere il vino giusto in pochi secondi. Il disciplinare è il regolamento di ogni denominazione.\n\nLa regola d\'oro dei professionisti: guarda il nome del produttore prima della denominazione. Un grande produttore in una zona minore batte spesso un mediocre in una zona famosa.\n\nL\'annata è il secondo elemento da guardare: cambia radicalmente il carattere del vino ogni anno.',
+    testo_en: 'Understanding wine classification lets you choose correctly in seconds. The golden rule: look at the producer\'s name before the appellation.',
+    testo_fr: 'Comprendre la classification vous permet de choisir correctement en quelques secondes.',
+    immagine: 'https://images.pexels.com/photos/3850838/pexels-photo-3850838.jpeg?auto=compress&w=900',
+    autore: 'Timotin', data: 'Aprile 2026', generato_ai: false,
+  },
+  {
+    id: 'seed-3', type: 'editorial', isNews: false,
+    titolo_it: 'Etna: il Vulcano che ha Cambiato il Vino Italiano',
+    titolo_en: 'Etna: The Volcano that Changed Italian Wine',
+    titolo_fr: 'L\'Etna : le Volcan qui a Changé le Vin Italien',
+    categoria_it: 'Terroir', categoria_en: 'Terroir', categoria_fr: 'Terroir',
+    testo_it: 'In pochi anni l\'Etna è diventato il terroir più discusso e desiderato del vino mondiale. Le 133 contrade — come i crus di Borgogna — identificano vigneti centenari ad alberello su sabbie laviche tra i 400 e i 1000 metri.\n\nIl Nerello Mascalese produce rossi trasparenti e profumati che ricordano più il Pinot Nero di Vosne-Romanée che i rossi siciliani tradizionali. Cornelissen, Terre Nere, Benanti, Passopisciaro: i nomi da conoscere.\n\nChi compra Etna oggi sta comprando il futuro del vino italiano.',
+    testo_en: 'Etna has become the world\'s most talked-about wine terroir. Its 133 contrade — like Burgundy\'s crus — identify century-old alberello vines on volcanic soils between 400 and 1000 metres.',
+    testo_fr: 'L\'Etna est devenu le terroir le plus discuté du monde du vin. Ses 133 contrade identifient des vignes centenaires sur des sols volcaniques entre 400 et 1000 mètres.',
+    immagine: 'https://images.pexels.com/photos/3532658/pexels-photo-3532658.jpeg?auto=compress&w=900',
+    autore: 'Timotin', data: 'Marzo 2026', generato_ai: false,
   },
 ];
 
@@ -295,37 +260,50 @@ function loadArticles() {
   try {
     if (fs.existsSync(ARTICLES_FILE)) {
       articlesStore = JSON.parse(fs.readFileSync(ARTICLES_FILE, 'utf8'));
-      console.log(`[Articles] ${articlesStore.length} articoli in cache`);
+      // Assicura che i seed siano sempre presenti
+      SEED_ARTICLES.forEach(function(seed) {
+        if (!articlesStore.find(a => a.id === seed.id)) {
+          articlesStore.push(seed);
+        }
+      });
+      console.log('[Articles] ' + articlesStore.length + ' articoli caricati');
     } else {
       articlesStore = [...SEED_ARTICLES];
       saveArticles();
-      console.log('[Articles] Inizializzato con seed');
+      console.log('[Articles] Inizializzato con ' + SEED_ARTICLES.length + ' seed');
     }
-  } catch(e) { articlesStore = [...SEED_ARTICLES]; }
+  } catch(e) {
+    console.warn('[Articles] Errore caricamento, uso seed:', e.message);
+    articlesStore = [...SEED_ARTICLES];
+  }
 }
+
 function saveArticles() {
   try { fs.writeFileSync(ARTICLES_FILE, JSON.stringify(articlesStore, null, 2)); }
   catch(e) { console.warn('[Save]', e.message); }
 }
+
 loadArticles();
 
-// RSS fetcher
+// Fetch URL con timeout
 function fetchUrl(url) {
-  return new Promise(resolve => {
-    const proto = url.startsWith('https') ? https : http;
-    const req = proto.get(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 SommelierWorldBot/1.0' },
-      timeout: 12000,
-    }, res => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return fetchUrl(res.headers.location).then(resolve);
-      }
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => resolve(d));
-    });
-    req.on('error', () => resolve(''));
-    req.on('timeout', () => { req.destroy(); resolve(''); });
+  return new Promise(function(resolve) {
+    try {
+      const proto = url.startsWith('https') ? https : http;
+      const req = proto.get(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 SommelierWorldBot/1.0' },
+        timeout: 12000,
+      }, function(res) {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          return fetchUrl(res.headers.location).then(resolve);
+        }
+        let d = '';
+        res.on('data', c => { if (d.length < 50000) d += c; });
+        res.on('end', () => resolve(d));
+      });
+      req.on('error', () => resolve(''));
+      req.on('timeout', () => { req.destroy(); resolve(''); });
+    } catch(e) { resolve(''); }
   });
 }
 
@@ -333,11 +311,15 @@ function parseRSS(xml) {
   const items = [];
   const re = /<item[^>]*>([\s\S]*?)<\/item>/gi;
   let m;
-  while ((m = re.exec(xml)) !== null && items.length < 6) {
+  while ((m = re.exec(xml)) !== null && items.length < 5) {
     const b = m[1];
-    const title = (b.match(/<title[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/s)?.[1]||'').replace(/<[^>]+>/g,'').replace(/&amp;/g,'&').trim();
-    const desc  = (b.match(/<description[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/description>/s)?.[1]||'').replace(/<[^>]+>/g,' ').replace(/&amp;/g,'&').replace(/\s+/g,' ').trim().substring(0,600);
-    if (title.length > 10) items.push({ title, desc });
+    const title = (b.match(/<title[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/s) || [])[1] || '';
+    const desc  = (b.match(/<description[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/description>/s) || [])[1] || '';
+    const clean = function(s) {
+      return s.replace(/<[^>]+>/g, ' ').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/\s+/g,' ').trim();
+    };
+    const t = clean(title);
+    if (t.length > 10) items.push({ title: t, desc: clean(desc).substring(0, 500) });
   }
   return items;
 }
@@ -347,22 +329,22 @@ const TOPICS = [
   'Champagne vs Franciacorta: le differenze vere',
   'Riesling — il vitigno più longevo del mondo',
   'I vini naturali: moda o rivoluzione?',
-  'Etna: il terroir più emozionante del decennio',
-  'Come degustare alla cieca come un Master Sommelier',
   'Borgogna: guida completa al sistema dei crus',
   'Abbinamento vino e formaggio: le 10 combinazioni perfette',
-  'La rivoluzione del vino georgiano — 8000 anni di kvevri',
   'Super Tuscan: la ribellione che ha cambiato il vino italiano',
   'Malbec argentino: dai vigneti andini al bicchiere',
-  'I vitigni autoctoni italiani dimenticati',
-  'Climate change e vino: come il riscaldamento cambia tutto',
-  'Vino e sushi: la guida completa oltre il sake',
-  'Rioja: Joven, Crianza, Reserva, Gran Reserva — le differenze',
-  'Affinamento in botte: rovere francese vs americano',
-  'Decantare o non decantare? Dipende dal vino',
-  'I vini da investimento: cosa vale davvero',
+  'La rivoluzione del vino georgiano — 8000 anni di kvevri',
+  'Degustazione alla cieca: metodo e segreti dei Master Sommelier',
+  'Temperatura di servizio: la verità che nessuno ti dice',
+  'Decantare o non decantare? Dipende dal vino e dall\'annata',
   'Sangiovese: 350 cloni, un\'identità sola',
-  'Pinot Nero: la sfida del vitigno più difficile',
+  'Pinot Nero: la sfida del vitigno più difficile da coltivare',
+  'Climate change e vino: come cambia il paesaggio viticolo mondiale',
+  'I grandi bianchi italiani: da Vermentino a Fiano di Avellino',
+  'Rioja: Joven, Crianza, Reserva, Gran Reserva — le differenze',
+  'Affinamento in botte: rovere francese vs americano vs slavonia',
+  'Vino e sushi: la guida completa oltre il sake',
+  'Le aste del vino: cosa vale di più e perché',
 ];
 
 const IMAGES = [
@@ -380,52 +362,58 @@ function todayStr() {
 }
 
 async function runDailyJob() {
-  console.log('[CRON] Job giornaliero avviato —', todayStr());
+  console.log('\n[CRON] ═══ Job giornaliero: ' + todayStr() + ' ═══');
   const dayN = Math.floor(Date.now() / 86400000);
 
-  // 1. Notizia reale da Google News
-  try {
-    const feeds = [
-      'https://news.google.com/rss/search?q=vino+viticoltura+denominazione&hl=it&gl=IT&ceid=IT:it',
-      'https://news.google.com/rss/search?q=wine+winery+sommelier+appellation&hl=en&gl=US&ceid=US:en',
-    ];
-    let newsItem = null;
-    for (const url of feeds) {
+  // 1. Prova a prendere una notizia reale
+  let newsAdded = false;
+  const newsFeeds = [
+    'https://news.google.com/rss/search?q=vino+viticoltura+denominazione&hl=it&gl=IT&ceid=IT:it',
+    'https://news.google.com/rss/search?q=wine+winery+sommelier+vintage&hl=en&gl=US&ceid=US:en',
+  ];
+  for (const url of newsFeeds) {
+    try {
       const xml = await fetchUrl(url);
       const items = parseRSS(xml);
-      if (items.length) { newsItem = items[0]; break; }
-    }
+      if (!items.length) continue;
+      const item = items[Math.floor(Math.random() * Math.min(3, items.length))];
 
-    if (newsItem) {
-      const SYS = 'Sei un giornalista enologico. Riscrivi la notizia in modo professionale. NO markdown. 2 paragrafi. Max 180 parole.';
-      const testo_it = await callAI(SYS, `Riscrivi in ITALIANO:\nTitolo: ${newsItem.title}\n${newsItem.desc}`, 500);
-      const testo_en = await callAI(SYS, `Rewrite in ENGLISH:\nTitle: ${newsItem.title}\n${newsItem.desc}`, 500);
-
-      const titleIt = await callAI('', `Titolo in italiano (max 10 parole, niente virgolette): "${newsItem.title}"`, 60);
+      const testo_it = await callAI(
+        'Sei un giornalista enologico. Riscrivi in italiano professionale. NO markdown. 2 paragrafi. Max 180 parole.',
+        'Notizia: ' + item.title + '\n' + item.desc, 500
+      );
+      const titleIt = await callAI('', 'Titolo italiano (max 9 parole, niente virgolette): "' + item.title + '"', 50);
 
       articlesStore.unshift({
         id: 'news-' + Date.now(), type:'news', isNews:true,
         titolo_it: titleIt.replace(/["""]/g,'').trim(),
-        titolo_en: newsItem.title, titolo_fr: titleIt.replace(/["""]/g,'').trim(),
-        categoria_it:'🗞 Notizia del Giorno', categoria_en:'🗞 Today\'s News', categoria_fr:'🗞 Actualité',
-        testo_it, testo_en, testo_fr: testo_it,
+        titolo_en: item.title, titolo_fr: titleIt.replace(/["""]/g,'').trim(),
+        categoria_it:'🗞 Notizia', categoria_en:'🗞 News', categoria_fr:'🗞 Actualité',
+        testo_it, testo_en: item.desc, testo_fr: testo_it,
         immagine: IMAGES[dayN % IMAGES.length],
         autore:'Sommelier World News', data: todayStr(), generato_ai:true,
       });
-      console.log('[CRON] ✓ Notizia generata');
-    }
-  } catch(e) { console.error('[CRON] Notizia errore:', e.message); }
+      console.log('[CRON] ✓ Notizia: ' + titleIt.trim());
+      newsAdded = true;
+      break;
+    } catch(e) { console.warn('[CRON] Notizia errore:', e.message); }
+  }
 
   await new Promise(r => setTimeout(r, 2000));
 
   // 2. Editoriale tematico
   try {
     const topic = TOPICS[dayN % TOPICS.length];
-    const SYS2 = 'Sei un sommelier e giornalista enologico. Scrivi un articolo approfondito sul vino. Cita produttori reali. NO markdown. 3 paragrafi. Max 220 parole.';
-    const testo_it = await callAI(SYS2, `Argomento: "${topic}". In italiano.`, 700);
-    const testo_en = await callAI(SYS2, `Topic: "${topic}". In English.`, 700);
+    const testo_it = await callAI(
+      'Sei un sommelier e giornalista. Scrivi un articolo sul vino. Cita produttori reali. NO markdown. 3 paragrafi. Max 220 parole.',
+      'Argomento: "' + topic + '". In italiano.', 700
+    );
+    const testo_en = await callAI(
+      'You are a wine journalist. Write a wine article. Cite real producers. NO markdown. 3 paragraphs. Max 220 words.',
+      'Topic: "' + topic + '". In English.', 700
+    );
 
-    articlesStore.splice(1, 0, {
+    articlesStore.splice(newsAdded ? 1 : 0, 0, {
       id: 'ai-' + Date.now(), type:'editorial', isNews:false,
       titolo_it: topic, titolo_en: topic, titolo_fr: topic,
       categoria_it:'📚 Magazine', categoria_en:'📚 Magazine', categoria_fr:'📚 Magazine',
@@ -433,27 +421,26 @@ async function runDailyJob() {
       immagine: IMAGES[(dayN + 3) % IMAGES.length],
       autore:'Sommelier World AI', data: todayStr(), generato_ai:true,
     });
-    console.log('[CRON] ✓ Editoriale generato:', topic);
+    console.log('[CRON] ✓ Editoriale: ' + topic);
   } catch(e) { console.error('[CRON] Editoriale errore:', e.message); }
 
-  // Mantieni max 50 articoli
+  // Mantieni max 50 articoli (seed sempre in fondo)
   const nonSeed = articlesStore.filter(a => !a.id.startsWith('seed'));
   const seeds   = articlesStore.filter(a =>  a.id.startsWith('seed'));
-  articlesStore  = [...nonSeed.slice(0, 48), ...seeds];
+  articlesStore  = [...nonSeed.slice(0, 47), ...seeds];
   saveArticles();
-  console.log(`[CRON] Completato — ${articlesStore.length} articoli totali`);
+  console.log('[CRON] Totale articoli: ' + articlesStore.length + '\n');
 }
 
 function setupCron() {
-  try {
-    const cron = require('node-cron');
-    cron.schedule('0 8 * * *', () => {
-      runDailyJob().catch(e => console.error('[Cron]', e.message));
-    });
-    console.log('[Cron] ✓ Articoli giornalieri schedulati alle 08:00 UTC');
-  } catch(e) {
-    console.log('[Cron] Usa cron-job.org → POST /api/articles/generate?secret=' + ADMIN_SECRET);
+  if (!nodeCron) {
+    console.log('[Cron] Non disponibile — usa cron-job.org per chiamare POST /api/articles/generate');
+    return;
   }
+  nodeCron.schedule('0 8 * * *', function() {
+    runDailyJob().catch(e => console.error('[Cron]', e.message));
+  });
+  console.log('[Cron] ✓ Job schedulato alle 08:00 UTC');
 }
 
 function requireAdmin(req, res, next) {
@@ -463,74 +450,67 @@ function requireAdmin(req, res, next) {
 }
 
 
-/* ════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    ROUTES
-   ════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 
-app.get('/', (req, res) => res.json({
-  status:   'ok',
-  version:  '7.3',
-  groq:     GROQ_KEY   ? '✓ attivo'   : '✗ mancante',
-  gemini:   GEMINI_KEY ? '✓ attivo'   : '✗ mancante',
-  email:    SMTP_USER  ? '✓ ' + SMTP_USER : '✗ non configurata',
-  articles: articlesStore.length,
-}));
-
-app.get('/api/health', (_, res) => res.json({ ok: true }));
-app.get('/api/ping',   (_, res) => res.json({ pong: Date.now() }));
-
-/* ── CONTATTI con email reale ──────────────────────────── */
-app.post('/api/contact', async (req, res) => {
-  const { name, email, subject, message } = req.body || {};
-
-  // Validazione
-  if (!name || !name.trim()) {
-    return res.status(400).json({ error: 'Nome obbligatorio' });
-  }
-  if (!email || !email.includes('@')) {
-    return res.status(400).json({ error: 'Email non valida' });
-  }
-  if (!message || message.trim().length < 5) {
-    return res.status(400).json({ error: 'Messaggio troppo corto' });
-  }
-
-  console.log(`[CONTACT] Nuovo messaggio da: ${name} <${email}>`);
-  console.log(`[CONTACT] Oggetto: ${subject || '—'}`);
-  console.log(`[CONTACT] Testo: ${message.substring(0, 100)}...`);
-
-  // Invia email
-  const emailSent = await sendContactEmail(
-    name.trim(), email.trim(),
-    subject || 'Messaggio da ' + name,
-    message.trim()
-  );
-
-  if (emailSent) {
-    console.log('[CONTACT] ✓ Email inviata con successo');
-    res.json({ ok: true, message: 'Messaggio inviato! Riceverai una conferma via email.' });
-  } else {
-    // Anche se l'email fallisce, rispondi ok (il log è nei Railway Logs)
-    console.log('[CONTACT] ⚠ Email non inviata (controlla SMTP_USER / SMTP_PASS)');
-    res.json({ ok: true, message: 'Messaggio ricevuto! Ti risponderemo presto.' });
-  }
+app.get('/', function(req, res) {
+  res.json({
+    status:   'ok',
+    version:  '7.4',
+    groq:     GROQ_KEY    ? '✓ attivo' : '✗ mancante GROQ_API_KEY',
+    gemini:   GEMINI_KEY  ? '✓ attivo' : '✗ mancante',
+    email:    SMTP_USER   ? '✓ ' + SMTP_USER : '✗ non configurata',
+    articles: articlesStore.length,
+    cron:     nodeCron    ? '✓ 08:00 UTC' : '✗ non disponibile',
+  });
 });
 
-/* ── AI ─────────────────────────────────────────────────── */
-app.post(['/api/chat', '/api/groq', '/api/gemini'], async (req, res) => {
-  const system  = req.body.system || req.body.systemPrompt || '';
-  const userMsg = req.body.userMsg || req.body.message || req.body.prompt || '';
+app.get('/api/health', function(_, res) { res.json({ ok: true }); });
+app.get('/api/ping',   function(_, res) { res.json({ pong: Date.now() }); });
+
+// ── CONTATTI ─────────────────────────────────────────────
+app.post('/api/contact', async function(req, res) {
+  const body = req.body || {};
+  const name    = (body.name    || '').trim();
+  const email   = (body.email   || '').trim();
+  const subject = (body.subject || '').trim();
+  const message = (body.message || '').trim();
+
+  if (!name)              return res.status(400).json({ error: 'Nome obbligatorio' });
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'Email non valida' });
+  if (message.length < 4) return res.status(400).json({ error: 'Messaggio troppo corto' });
+
+  console.log('[CONTACT] ' + name + ' <' + email + '> — ' + (subject || '—'));
+
+  const sent = await sendContactEmail(name, email, subject, message);
+  res.json({
+    ok: true,
+    message: sent
+      ? 'Messaggio inviato! Riceverai una conferma via email.'
+      : 'Messaggio ricevuto! Ti risponderemo entro 48 ore.',
+  });
+});
+
+// ── AI ─────────────────────────────────────────────────
+app.post(['/api/chat', '/api/groq', '/api/gemini'], async function(req, res) {
+  const system  = req.body.system  || req.body.systemPrompt || '';
+  const userMsg = req.body.userMsg || req.body.message      || req.body.prompt || '';
   if (!userMsg && !system) return res.status(400).json({ error: 'Messaggio vuoto' });
   try {
     const text = await callAI(system, userMsg);
-    res.json({ text, choices: [{ message: { content: text } }] });
+    res.json({ text: text, choices: [{ message: { content: text } }] });
   } catch(e) {
     console.error('[AI Error]', e.message);
-    res.status(500).json({ error: e.message });
+    let msg = e.message;
+    if (msg.includes('429') || msg.includes('quota')) msg = 'Quota AI esaurita. Riprova tra qualche ora.';
+    if (msg.includes('mancante'))                      msg = 'Servizio AI non configurato. Aggiungi GROQ_API_KEY su Railway.';
+    res.status(500).json({ error: msg });
   }
 });
 
-/* ── ARTICOLI ───────────────────────────────────────────── */
-app.get('/api/articles', (_, res) => {
+// ── ARTICOLI ───────────────────────────────────────────
+app.get('/api/articles', function(_, res) {
   const sorted = [
     ...articlesStore.filter(a => a.isNews),
     ...articlesStore.filter(a => !a.isNews && !a.id.startsWith('seed')),
@@ -539,7 +519,7 @@ app.get('/api/articles', (_, res) => {
   res.json(sorted);
 });
 
-app.post('/api/articles/generate', requireAdmin, async (req, res) => {
+app.post('/api/articles/generate', requireAdmin, async function(req, res) {
   try {
     await runDailyJob();
     res.json({ ok: true, total: articlesStore.length });
@@ -548,24 +528,27 @@ app.post('/api/articles/generate', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/articles', requireAdmin, (req, res) => {
-  const { titolo_it, testo_it, categoria_it, immagine, autore } = req.body;
-  if (!titolo_it || !testo_it) return res.status(400).json({ error: 'titolo_it e testo_it obbligatori' });
+app.post('/api/articles', requireAdmin, function(req, res) {
+  const b = req.body || {};
+  if (!b.titolo_it || !b.testo_it) {
+    return res.status(400).json({ error: 'titolo_it e testo_it obbligatori' });
+  }
   const art = {
-    id: 'manual-' + Date.now(), type: 'editorial', isNews: false,
-    titolo_it, titolo_en: req.body.titolo_en || titolo_it,
-    titolo_fr: req.body.titolo_fr || titolo_it,
-    categoria_it: categoria_it || 'Magazine', categoria_en: 'Magazine', categoria_fr: 'Magazine',
-    testo_it, testo_en: req.body.testo_en || testo_it, testo_fr: req.body.testo_fr || testo_it,
-    immagine: immagine || IMAGES[0], autore: autore || 'Sommelier World',
+    id: 'manual-' + Date.now(), type: 'editorial', isNews: !!b.isNews,
+    titolo_it: b.titolo_it, titolo_en: b.titolo_en || b.titolo_it,
+    titolo_fr: b.titolo_fr || b.titolo_it,
+    categoria_it: b.categoria_it || 'Magazine', categoria_en: 'Magazine', categoria_fr: 'Magazine',
+    testo_it: b.testo_it, testo_en: b.testo_en || b.testo_it, testo_fr: b.testo_fr || b.testo_it,
+    immagine: b.immagine || IMAGES[0], autore: b.autore || 'Sommelier World',
     data: todayStr(), generato_ai: false,
   };
   articlesStore.unshift(art);
   saveArticles();
+  console.log('[Articles] Aggiunto manuale:', art.titolo_it);
   res.json({ ok: true, article: art });
 });
 
-app.delete('/api/articles/:id', requireAdmin, (req, res) => {
+app.delete('/api/articles/:id', requireAdmin, function(req, res) {
   const before = articlesStore.length;
   articlesStore = articlesStore.filter(a => a.id !== req.params.id);
   if (articlesStore.length === before) return res.status(404).json({ error: 'Non trovato' });
@@ -574,20 +557,18 @@ app.delete('/api/articles/:id', requireAdmin, (req, res) => {
 });
 
 
-/* ════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    START
-   ════════════════════════════════════════════════════════ */
-app.listen(PORT, '0.0.0.0', async () => {
-  console.log('\n╔══════════════════════════════════════════════╗');
-  console.log('║  🍷 SOMMELIER WORLD SERVER v7.3              ║');
-  console.log(`║  Porta: ${PORT}                                 ║`);
-  console.log('╠══════════════════════════════════════════════╣');
-  console.log(`║  AI Groq:   ${GROQ_KEY   ? '✓ attivo' : '✗ mancante GROQ_API_KEY'}`);
-  console.log(`║  AI Gemini: ${GEMINI_KEY ? '✓ attivo' : '✗ mancante'}`);
-  console.log(`║  Email:     ${SMTP_USER  ? SMTP_USER : '✗ configurare SMTP_USER + SMTP_PASS'}`);
-  console.log(`║  Articoli:  ${articlesStore.length} in cache`);
-  console.log('╚══════════════════════════════════════════════╝\n');
-
-  await testEmail();
+   ═══════════════════════════════════════════════════════ */
+app.listen(PORT, '0.0.0.0', function() {
+  console.log('\n╔══════════════════════════════════════════╗');
+  console.log('║  🍷 SOMMELIER WORLD v7.4                 ║');
+  console.log('║  Porta: ' + PORT + '                           ║');
+  console.log('╠══════════════════════════════════════════╣');
+  console.log('║  Groq:    ' + (GROQ_KEY   ? '✓ attivo       ' : '✗ GROQ_API_KEY mancante'));
+  console.log('║  Gemini:  ' + (GEMINI_KEY ? '✓ attivo       ' : '✗ mancante     '));
+  console.log('║  Email:   ' + (SMTP_USER  ? '✓ ' + SMTP_USER : '✗ SMTP non configurato'));
+  console.log('║  Articoli:  ' + articlesStore.length + ' in cache');
+  console.log('╚══════════════════════════════════════════╝\n');
   setupCron();
 });
