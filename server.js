@@ -1,6 +1,8 @@
 /**
- * SOMMELIER WORLD — server.js v9.0 TABULA RASA
- * Pulito. Solo l'essenziale.
+ * SOMMELIER WORLD — server.js v9.1
+ * Completo, pulito, senza duplicati.
+ * Railway ENV: GROQ_API_KEY, GEMINI_API_KEY, ADMIN_SECRET,
+ *              SMTP_USER, SMTP_PASS, ADMIN_EMAIL
  */
 'use strict';
 
@@ -11,18 +13,17 @@ require('dotenv').config();
 const app  = express();
 const PORT = process.env.PORT || 8080;
 
+/* ── Middleware ──────────────────────────── */
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
-
-/* Cache-Control: nessuna cache su nessuna risposta */
-app.use(function(req, res, next){
+app.use((_req, res, next) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Pragma',  'no-cache');
   res.setHeader('Expires', '0');
-  res.setHeader('Surrogate-Control', 'no-store');
   next();
 });
 
+/* ── Configurazione ──────────────────────── */
 const GROQ_KEY     = process.env.GROQ_API_KEY   || '';
 const GEMINI_KEY   = process.env.GEMINI_API_KEY  || '';
 const ADMIN_SECRET = process.env.ADMIN_SECRET    || 'sommelier2026';
@@ -30,22 +31,24 @@ const SMTP_USER    = process.env.SMTP_USER       || '';
 const SMTP_PASS    = process.env.SMTP_PASS       || '';
 const ADMIN_EMAIL  = process.env.ADMIN_EMAIL     || 'timotiniurie49@gmail.com';
 
-/* Cache articoli in memoria */
+/* ── Stato in memoria ─────────────────────── */
 let _articles = [];
 let _lastGen  = '';
 
 function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
-/* ── Groq ─────────────────────────────────── */
+/* ════════════════════════════════════════════
+   AI — Groq primario, Gemini fallback
+   ════════════════════════════════════════════ */
 async function callGroq(system, user, maxTokens = 1200) {
   if (!GROQ_KEY) throw new Error('GROQ_API_KEY mancante');
   const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
       max_tokens: maxTokens,
-      temperature: 0.75,
+      temperature: 0.78,
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
     })
   });
@@ -54,7 +57,6 @@ async function callGroq(system, user, maxTokens = 1200) {
   return d.choices?.[0]?.message?.content || '';
 }
 
-/* ── Gemini fallback ──────────────────────── */
 async function callGemini(prompt, maxTokens = 1200) {
   if (!GEMINI_KEY) throw new Error('GEMINI_API_KEY mancante');
   const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
@@ -65,7 +67,7 @@ async function callGemini(prompt, maxTokens = 1200) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: maxTokens, temperature: 0.75 }
+        generationConfig: { maxOutputTokens: maxTokens, temperature: 0.78 }
       })
     }
   );
@@ -74,7 +76,6 @@ async function callGemini(prompt, maxTokens = 1200) {
   return d.candidates?.[0]?.content?.parts?.[0]?.text || '';
 }
 
-/* ── AI con fallback automatico ──────────── */
 async function callAI(system, user, maxTokens = 1200) {
   try {
     return await callGroq(system, user, maxTokens);
@@ -84,7 +85,9 @@ async function callAI(system, user, maxTokens = 1200) {
   }
 }
 
-/* ── Email (opzionale) ───────────────────── */
+/* ════════════════════════════════════════════
+   EMAIL
+   ════════════════════════════════════════════ */
 async function sendEmail(to, subject, html) {
   if (!SMTP_USER || !SMTP_PASS) return;
   try {
@@ -98,66 +101,308 @@ async function sendEmail(to, subject, html) {
 }
 
 /* ════════════════════════════════════════════
-   ROOT / HEALTH
+   FOTO INTELLIGENTE — mappa topic → URL vino
+   Tutte verificate manualmente come foto di vino/vigne
    ════════════════════════════════════════════ */
-app.get('/', (req, res) => res.json({
-  version: '9.0',
-  groq: !!GROQ_KEY,
-  gemini: !!GEMINI_KEY,
-  articles: _articles.length,
-  lastGen: _lastGen || 'mai'
-}));
+const PHOTO_MAP = {
+  wine_glass:    'https://images.unsplash.com/photo-1510812431401-41d2bd2722f3?w=700&q=80&fit=crop',
+  wine_red:      'https://images.unsplash.com/photo-1568702846914-96b305d2aaeb?w=700&q=80&fit=crop',
+  wine_white:    'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=700&q=80&fit=crop',
+  vineyard_hill: 'https://images.unsplash.com/photo-1506377247377-2a5b3b417ebb?w=700&q=80&fit=crop',
+  vineyard_sun:  'https://images.unsplash.com/photo-1474722883778-792e7990302f?w=700&q=80&fit=crop',
+  winery:        'https://images.unsplash.com/photo-1586370434639-0fe43b2d32e6?w=700&q=80&fit=crop',
+  cellar:        'https://images.unsplash.com/photo-1504279577054-acfeccf8fc52?w=700&q=80&fit=crop',
+  grapes:        'https://images.unsplash.com/photo-1515779122185-2390ccdf060b?w=700&q=80&fit=crop',
+  harvest:       'https://images.unsplash.com/photo-1596363470302-8d7c62a64c2d?w=700&q=80&fit=crop',
+  champagne:     'https://images.unsplash.com/photo-1578911373434-0cb395d2cbfb?w=700&q=80&fit=crop',
+  sommelier:     'https://images.unsplash.com/photo-1574014671294-4b64eb4c68b4?w=700&q=80&fit=crop',
+  bottles:       'https://images.unsplash.com/photo-1510812431401-41d2bd2722f3?w=700&q=80&fit=crop',
+};
 
-app.get('/api/health', (req, res) => res.json({ ok: true, version: '9.0' }));
+function topicPhoto(tag, title) {
+  const t = ((tag || '') + ' ' + (title || '')).toLowerCase();
+  if (t.match(/champagne|bollicin|spumant|prosecco|cava/)) return PHOTO_MAP.champagne;
+  if (t.match(/sommelier|degust|abbinament|calice/))       return PHOTO_MAP.sommelier;
+  if (t.match(/vendemmia|harvest|raccolt/))                return PHOTO_MAP.harvest;
+  if (t.match(/uva|grapes|grappol/))                       return PHOTO_MAP.grapes;
+  if (t.match(/cantina|barrique|barrel|botti/))            return PHOTO_MAP.cellar;
+  if (t.match(/rosso|nebbiolo|sangiovese|barolo|malbec|shiraz|grenach/)) return PHOTO_MAP.wine_red;
+  if (t.match(/bianco|riesling|chardonnay|sauvignon|blanc/))            return PHOTO_MAP.wine_white;
+  if (t.match(/notizia|mercato|prezzi|asta|award|premio/)) return PHOTO_MAP.bottles;
+  if (t.match(/produttor|winery|azienda|cantina/))         return PHOTO_MAP.winery;
+  if (t.match(/etna|vulcan|santorini|canari/))             return PHOTO_MAP.vineyard_sun;
+  return PHOTO_MAP.vineyard_hill;
+}
 
 /* ════════════════════════════════════════════
-   POST /api/groq — SOMMELIER AI
-   Il vincolo geografico è applicato QUI nel server:
-   se l'utente manda paese/regione, li blocchiamo nel system prompt.
+   TOPICS DINAMICI — variano ogni giorno
+   Pool mondiali: 7 news, 14 terroir, 8 som,
+   7 viticoltura, 10 vitigni
+   ════════════════════════════════════════════ */
+function getDailyTopics() {
+  const today = new Date();
+  const d = Math.floor((today - new Date(today.getFullYear(), 0, 0)) / 86400000);
+
+  const NEWS_POOL = [
+    "notizia sul mercato mondiale dei vini pregiati 2025-2026: aste, prezzi record, nuove denominazioni",
+    "impatto del cambiamento climatico sulle vendemmie mondiali 2025-2026 con dati e produttori citati",
+    "produttore mondiale premiato nel 2025-2026 da Decanter, Wine Spectator o Wine Advocate",
+    "tendenze di consumo vini 2026: quali paesi emergono, quali stili crescono, dati Nielsen o IWSR",
+    "innovazione in cantina o vigna 2025-2026: anfore, orange wine, biodinamica, droni, AI in vigna",
+    "vino storico battuto all'asta o cantina acquisita da nuovi proprietari nel 2025-2026",
+    "denominazioni emergenti 2025-2026: nuove DOC italiane, nuove AVA americane, trend globali",
+  ];
+
+  const TERROIR_POOL = [
+    "Mosel tedesca: ardesia blu devoniana, vigneti eroici al 70%, Egon Muller, JJ Prum, Wehlener Sonnenuhr",
+    "Barolo Piemonte: nebbiolo sulle Langhe, MGA storiche, Conterno Monfortino, Mascarello, Bruno Giacosa",
+    "Champagne: suolo cretaceo, cinque sottozone, grande maison vs recoltant-manipulant, Krug vs Bollinger",
+    "Santorini Grecia: Assyrtiko su pomice vulcanica, alberello kouloura, Gaia Wines, Hatzidakis, Sigalas",
+    "Priorat Catalogna: llicorella scura, Garnacha centenaria 60+ anni, Alvaro Palacios, Clos Mogador",
+    "Wachau Austria: Gruner Veltliner e Riesling sul Danubio, classificazione Smaragd, FX Pichler, Prager",
+    "Barossa Valley Australia: Shiraz centenario old vines 100+ anni, Penfolds Grange, Henschke Hill of Grace",
+    "Marlborough Nuova Zelanda: Sauvignon Blanc, terroir alluvionale, Cloudy Bay, Greywacke, Dog Point",
+    "Mendoza Argentina: Malbec sulle Ande a 900-1500m, Catena Zapata Adrianna Vineyard, Achaval Ferrer",
+    "Borgogna Francia: Pinot Noir e Chardonnay sui Grands Crus, DRC Romanee-Conti, Leroy, Rousseau",
+    "Etna Sicilia: Nerello Mascalese sulle 133 contrade vulcaniche, Cornelissen, Terre Nere, Passopisciaro",
+    "Tokaj Ungheria: Furmint e Harslevelu, botrytis puttonyos, storia dei Re, Disznoko, Royal Tokaji",
+    "Georgia: Kvevri interrate, Rkatsiteli ambrato, Saperavi potente, 8000 anni di storia, Pheasants Tears",
+    "Rioja Spagna: Tempranillo sulle tre sottozone, Gran Reserva, Muga Prado Enea, CVNE Imperial",
+  ];
+
+  const SOM_POOL = [
+    "decantazione: quando usarla e quando evitarla, vini che ne beneficiano, tempi per ogni stile",
+    "abbinamento cibo-vino nel mondo: principi di concordanza e contrasto, 8 abbinamenti perfetti internazionali",
+    "temperatura di servizio: impatto sul vino, regole pratiche per spumanti bianchi rossi dolci al ristorante",
+    "degustazione professionale metodo AIS: esame visivo olfattivo gustativo, come descrivere un grande vino",
+    "grandi annate del mondo 2010-2024: Borgogna 2015, Barolo 2016, Mosel 2021, Napa 2013, quale comprare",
+    "Champagne e bollicine mondiali: metodo classico vs Charmat vs petillant naturel, come scegliere il migliore",
+    "vini naturali biodinamici organici: differenze reali, produttori di riferimento, come riconoscerli al naso",
+    "vini dolci del mondo: Sauternes, TBA del Mosel, Tokaj Aszu, Vin Santo, Recioto, Ice Wine canadese",
+  ];
+
+  const VIT_POOL = [
+    "potatura invernale e sistemi di allevamento: Guyot borgognone, alberello siciliano, Lyre americano",
+    "cambiamento climatico in vigna: adattamenti dei produttori, vitigni resistenti, vigneti ad alta quota",
+    "vendemmia: come si decide il momento perfetto, differenze tra nord Europa e Mediterraneo, biochimica",
+    "viticoltura biodinamica: calendario lunare, preparati 500-501, produttori mondiali da DRC a Zind-Humbrecht",
+    "il terroir: come suolo clima e uomo creano il carattere irripetibile di un vino, esempio Borgogna vs Barossa",
+    "vitigni autoctoni dimenticati e recuperati: Timorasso, Grillo, Coda di Volpe, Xinomavro, Godello, Sagrantino",
+    "irrigazione e siccità: sistemi goccia a goccia, stress idrico controllato, Cile Argentina California vs Europa",
+  ];
+
+  const VIG_POOL = [
+    "Nebbiolo: Barolo Barbaresco Gattinara, vitigno piu difficile Italia, come invecchia, MGA storiche",
+    "Riesling: Mosel Alsazia Rheingau Wachau Clare Valley, il piu longevo al mondo, petroliosita TDN",
+    "Pinot Nero: Borgogna vs Willamette vs Otago vs Ahr, Santo Graal dei vitigni rossi, perche e impossibile",
+    "Sangiovese famiglia di cloni: Brunello Grosso, Prugnolo Gentile, Morellino, Chianti, differenze genetiche",
+    "Assyrtiko Santorini: minerale vulcanico, Gaia Wines, Hatzidakis, longeva struttura, perche e unico al mondo",
+    "Malbec Argentina vs Cahors Francia: stessa uva mondi opposti, Catena Zapata vs Chateau Lagrezette",
+    "Grenache Garnacha Cannonau: piu coltivato al mondo, Priorat vs Provenza vs Sardegna, stili a confronto",
+    "Cabernet Sauvignon: Bordeaux vs Napa vs Cile vs Toscana, come esprime il terroir diversamente",
+    "Shiraz Syrah: Nord Rodano vs Barossa, Hermitage Chave vs Penfolds Grange, stesso vitigno mondi opposti",
+    "vitigni aromatici: Gewurztraminer Alsazia, Moscato Piemonte, Torrontes Argentina, Malvasia Sicilia",
+  ];
+
+  const n  = NEWS_POOL[d % NEWS_POOL.length];
+  const t1 = TERROIR_POOL[d % TERROIR_POOL.length];
+  const t2 = TERROIR_POOL[(d + 6) % TERROIR_POOL.length];
+  const s  = SOM_POOL[(d + 2) % SOM_POOL.length];
+  const v  = VIT_POOL[(d + 3) % VIT_POOL.length];
+  const g  = VIG_POOL[(d + 4) % VIG_POOL.length];
+
+  return [
+    {
+      tag: '🗞 Wine News', isNews: true, photo: 'bottles',
+      it: `Scrivi una notizia attuale e coinvolgente (2025-2026) su: ${n}. Struttura: hook forte (60 parole) + analisi approfondita (280 parole) + impatto sul mercato e consiglio pratico per il lettore (160 parole). Usa fatti specifici, nomi reali, numeri concreti. TOTALE 500 parole. Solo italiano.`,
+      en: `Write a current and engaging 2025-2026 wine news about: ${n}. Structure: strong hook (60w) + deep analysis (280w) + market impact and practical advice (160w). Specific facts, real names, numbers. 500 words. English only.`,
+      fr: `Ecris une actualite vinicole 2025-2026 captivante sur: ${n}. Structure: accroche forte (60m) + analyse approfondie (280m) + impact marche et conseil pratique (160m). Faits precis, noms reels. 500 mots. Francais uniquement.`
+    },
+    {
+      tag: '🌍 Terroir', isNews: false, photo: 'vineyard_hill',
+      it: `Scrivi un articolo appassionato e dettagliato su: ${t1}. Struttura: storia e identita del territorio (120 parole) + geologia e clima spiegati in modo semplice e vivido (160 parole) + produttori chiave con vini e prezzi specifici (120 parole) + curiosita rara che pochi conoscono (100 parole). TOTALE 500 parole. Solo italiano.`,
+      en: `Write a passionate detailed article about: ${t1}. Structure: territory identity and history (120w) + geology and climate in vivid simple terms (160w) + key producers with specific wines and prices (120w) + rare fact few people know (100w). 500 words. English only.`,
+      fr: `Ecris un article passionne et detaille sur: ${t1}. Structure: identite et histoire du territoire (120m) + geologie et climat en termes vivants (160m) + producteurs cles avec vins et prix specifiques (120m) + curiosite rare (100m). 500 mots. Francais uniquement.`
+    },
+    {
+      tag: '📚 Sommelier', isNews: false, photo: 'sommelier',
+      it: `Scrivi un articolo tecnico e pratico su: ${s}. Struttura: perche e importante saperlo (80 parole) + regole pratiche con esempi di vini reali (240 parole) + errori comuni da evitare (100 parole) + consiglio del maestro (80 parole). TOTALE 500 parole. Solo italiano.`,
+      en: `Write a technical and practical article about: ${s}. Structure: why it matters (80w) + practical rules with real wine examples (240w) + common mistakes to avoid (100w) + master sommelier tip (80w). 500 words. English only.`,
+      fr: `Ecris un article technique et pratique sur: ${s}. Structure: pourquoi cest important (80m) + regles pratiques avec exemples reels (240m) + erreurs courantes (100m) + conseil du maitre (80m). 500 mots. Francais uniquement.`
+    },
+    {
+      tag: '🍇 Viticoltura', isNews: false, photo: 'harvest',
+      it: `Scrivi un articolo appassionante su: ${v}. Struttura: la sfida del vignaiolo spiegata con una storia concreta (120 parole) + tecnica spiegata in modo accessibile con esempi mondiali (200 parole) + come questo influenza il vino nel bicchiere (100 parole) + 3 produttori di riferimento con il loro approccio unico (80 parole). TOTALE 500 parole. Solo italiano.`,
+      en: `Write an engaging article about: ${v}. Structure: the winegrower challenge told through a concrete story (120w) + technique explained accessibly with world examples (200w) + how this affects the wine in the glass (100w) + 3 reference producers and their approach (80w). 500 words. English only.`,
+      fr: `Ecris un article captivant sur: ${v}. Structure: le defi du vigneron raconte a travers une histoire concrete (120m) + technique accessible avec exemples mondiaux (200m) + impact sur le vin (100m) + 3 producteurs de reference (80m). 500 mots. Francais uniquement.`
+    },
+    {
+      tag: '🍷 Vitigni', isNews: false, photo: 'wine_red',
+      it: `Scrivi un articolo appassionante sul vitigno: ${g}. Struttura: chi e questo vitigno e dove nasce (100 parole) + carattere ampelografico e sensoriale con paragoni vividi (160 parole) + i tre migliori produttori mondiali con vini specifici e prezzi (140 parole) + perche vale la pena conoscerlo (100 parole). TOTALE 500 parole. Solo italiano.`,
+      en: `Write an engaging article on: ${g}. Structure: what is this grape and where it comes from (100w) + ampelographic and sensory character with vivid comparisons (160w) + top 3 world producers with specific wines and prices (140w) + why it is worth knowing (100w). 500 words. English only.`,
+      fr: `Ecris un article captivant sur: ${g}. Structure: qu'est-ce que ce cepage et d'ou vient-il (100m) + caractere ampelographique et sensoriel avec comparaisons vivantes (160m) + 3 meilleurs producteurs mondiaux avec vins et prix (140m) + pourquoi le connaitre (100m). 500 mots. Francais uniquement.`
+    },
+    {
+      tag: '🌍 Terroir Mondiale', isNews: false, photo: 'vineyard_sun',
+      it: `Scrivi un articolo appassionato e curioso su: ${t2}. Struttura: l'elemento sorprendente che rende questa zona unica (100 parole) + il suolo e il microclima spiegati in modo sensoriale (160 parole) + produttori emergenti da scoprire (120 parole) + come degustare questi vini al meglio (120 parole). TOTALE 500 parole. Solo italiano.`,
+      en: `Write a passionate article about: ${t2}. Structure: the surprising element that makes this region unique (100w) + soil and microclimate explained sensorially (160w) + emerging producers to discover (120w) + how to taste these wines at their best (120w). 500 words. English only.`,
+      fr: `Ecris un article passionne sur: ${t2}. Structure: element surprenant qui rend cette region unique (100m) + sol et microclimat expliques sensorellement (160m) + producteurs emergents (120m) + comment deguster ces vins (120m). 500 mots. Francais uniquement.`
+    },
+  ];
+}
+
+/* ════════════════════════════════════════════
+   GENERAZIONE ARTICOLI
+   ════════════════════════════════════════════ */
+const SYS_ART = 'Sei un esperto giornalista enogastronomico internazionale, stile Decanter e Wine Spectator. ' +
+  'Scrivi con precisione, passione e concretezza. ' +
+  'Regole OBBLIGATORIE: (1) usa sempre nomi reali di produttori, denominazioni, annate specifiche; ' +
+  '(2) includi almeno 3 dettagli tecnici concreti (es. suolo, altitudine, resa/ettaro, gradazione); ' +
+  '(3) racconta come una storia che cattura, non elencare fatti; ' +
+  '(4) ogni articolo deve includere un fatto sorprendente che pochi conoscono.';
+
+const SYS_TIT = 'Sei un editor di una rivista di vino. ' +
+  'Rispondi SOLO con il titolo (massimo 8 parole, nessuna virgolette, nessuna punteggiatura finale). ' +
+  'Il titolo deve essere evocativo e preciso, non generico.';
+
+async function generateArticles(force = false) {
+  const today = new Date().toISOString().split('T')[0];
+  if (!force && _lastGen === today && _articles.length > 0) {
+    console.log('[articles] Cache valida per', today);
+    return _articles;
+  }
+
+  console.log('[articles] Generazione per', today);
+  const arts = [];
+  const topics = getDailyTopics();
+
+  for (let i = 0; i < topics.length; i++) {
+    const T = topics[i];
+    try {
+      /* Italiano */
+      const txt_it = await callAI(`${SYS_ART} Rispondi solo in italiano.`, T.it, 1100);
+      await sleep(700);
+      const tit_it = await callAI(SYS_TIT, `Titolo per: ${txt_it.substring(0, 250)}`, 60);
+      await sleep(400);
+
+      /* Inglese */
+      const txt_en = await callAI(`${SYS_ART} Reply only in English.`, T.en, 1100);
+      await sleep(700);
+      const tit_en = await callAI(
+        'You are a wine magazine editor. Reply ONLY with the title (max 8 words, no quotes, no final punctuation).',
+        `Title for: ${txt_en.substring(0, 250)}`, 60
+      );
+      await sleep(400);
+
+      /* Francese */
+      const txt_fr = await callAI(`${SYS_ART} Réponds uniquement en français.`, T.fr, 1100);
+      await sleep(700);
+      const tit_fr = await callAI(
+        'Tu es un éditeur de magazine vinicole. Réponds UNIQUEMENT avec le titre (max 8 mots, sans guillemets).',
+        `Titre pour: ${txt_fr.substring(0, 250)}`, 60
+      );
+      await sleep(400);
+
+      const cleanTit = s => s.trim().replace(/^["'«»\-–—]+|["'«»\-–—]+$/g, '').trim();
+
+      const art = {
+        id:           `art_${today}_${i}`,
+        isNews:       T.isNews,
+        generato_ai:  true,
+        categoria_it: T.tag,
+        categoria_en: T.tag,
+        categoria_fr: T.tag,
+        titolo_it:    cleanTit(tit_it),
+        titolo_en:    cleanTit(tit_en),
+        titolo_fr:    cleanTit(tit_fr),
+        testo_it:     txt_it.trim(),
+        testo_en:     txt_en.trim(),
+        testo_fr:     txt_fr.trim(),
+        autore:       'Sommelier World AI',
+        data:         new Date().toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' }),
+        immagine:     PHOTO_MAP[T.photo] || PHOTO_MAP.vineyard_hill,
+      };
+
+      arts.push(art);
+      console.log(`[articles] ${i + 1}/${topics.length} ✓ "${art.titolo_it}"`);
+    } catch (e) {
+      console.error(`[articles] topic ${i} errore:`, e.message);
+    }
+  }
+
+  if (arts.length > 0) { _articles = arts; _lastGen = today; }
+  return arts;
+}
+
+/* ════════════════════════════════════════════
+   ROUTE: ROOT + HEALTH
+   ════════════════════════════════════════════ */
+app.get('/', (_req, res) => res.json({
+  name:     'Sommelier World Server',
+  version:  '9.1',
+  groq:     !!GROQ_KEY,
+  gemini:   !!GEMINI_KEY,
+  articles: _articles.length,
+  lastGen:  _lastGen || 'mai',
+  ok:       true,
+}));
+
+app.get('/api/health', (_req, res) => res.json({ ok: true, version: '9.1' }));
+
+app.get('/api/debug', (_req, res) => res.json({
+  version:    '9.1',
+  timestamp:  new Date().toISOString(),
+  groq:       !!GROQ_KEY,
+  gemini:     !!GEMINI_KEY,
+  email:      !!SMTP_USER,
+  articles:   _articles.length,
+  lastGen:    _lastGen || 'mai',
+  uptime_min: Math.round(process.uptime() / 60),
+  message:    'Railway v9.1 operativo ✓',
+}));
+
+/* ════════════════════════════════════════════
+   ROUTE: SOMMELIER AI
+   Vincolo geografico applicato lato server
    ════════════════════════════════════════════ */
 app.post(['/api/groq', '/api/chat'], async (req, res) => {
   try {
-    let { system = '', userMsg = '', language = 'it', maxTokens = 1400,
+    let { system = '', userMsg = '', language = 'it', maxTokens = 1600,
           paese = '', regione = '' } = req.body;
 
-    /* 1. ISTRUZIONE LINGUA — sempre in testa */
+    /* Istruzione lingua — sempre in testa */
     const LANG = {
-      it: 'Rispondi SEMPRE e SOLO in italiano. Non usare altre lingue.',
-      en: 'Reply ALWAYS and ONLY in English. Do not use other languages.',
-      fr: 'Réponds TOUJOURS et UNIQUEMENT en français. N\'utilise pas d\'autres langues.'
+      it: 'Rispondi SEMPRE e SOLO in italiano.',
+      en: 'Reply ALWAYS and ONLY in English.',
+      fr: 'Réponds TOUJOURS et UNIQUEMENT en français.'
     };
     const langCmd = LANG[language] || LANG.it;
     if (!system.includes(langCmd)) system = `${langCmd}\n${system}`;
 
-    /* 2. VINCOLO GEOGRAFICO — se il client manda paese/regione */
-    // Il client può inviare paese e regione come parametri separati
-    // oppure già inclusi nel userMsg. Li intercettiamo qui per sicurezza.
+    /* Vincolo geografico assoluto */
     const ESEMPI = {
-      'Germania': "Riesling Spätlese del Mosel (Egon Müller, JJ Prüm), Spätburgunder Ahr (Meyer-Näkel), Silvaner Franken",
-      'Francia':  "Bourgogne Pinot Noir, Chablis, Champagne, Châteauneuf-du-Pape, Sancerre Sauvignon Blanc",
-      'Spagna':   "Rioja Tempranillo (Muga, CVNE), Ribera del Duero, Albariño Rías Baixas, Priorat Garnacha",
-      'Austria':  "Grüner Veltliner Smaragd Wachau (FX Pichler, Prager), Riesling Kamptal, Blaufränkisch",
-      'USA':      "Napa Valley Cabernet Sauvignon (Opus One, Heitz), Willamette Pinot Noir, Finger Lakes Riesling",
-      'Grecia':   "Assyrtiko di Santorini (Gaia, Hatzidakis, Sigalas), Xinomavro Naoussa (Thymiopoulos)",
-      'Portogallo':"Douro Touriga Nacional (Ramos Pinto, Niepoort), Alentejo, Vinho Verde Alvarinho",
-      'Argentina':"Mendoza Malbec (Catena Zapata, Achaval Ferrer), Salta Torrontés, Uco Valley",
-      'Australia':"Barossa Shiraz (Penfolds Grange, Henschke), Clare Valley Riesling, Yarra Pinot Noir",
+      'Germania':   'Riesling Mosel (Egon Muller, JJ Prum), Spatburgunder Ahr (Meyer-Nakel), Silvaner Franken',
+      'Francia':    'Bourgogne Pinot Noir, Chablis, Champagne, Chateauneuf-du-Pape, Sancerre',
+      'Spagna':     'Rioja Tempranillo (Muga, CVNE), Ribera del Duero, Albarino Rias Baixas, Priorat',
+      'Austria':    'Gruner Veltliner Smaragd Wachau (FX Pichler), Riesling Kamptal, Blaufrankisch',
+      'USA':        'Napa Cabernet Sauvignon (Opus One, Heitz), Willamette Pinot Noir, Finger Lakes Riesling',
+      'Grecia':     'Assyrtiko Santorini (Gaia, Hatzidakis), Xinomavro Naoussa (Thymiopoulos)',
+      'Portogallo': 'Douro Touriga Nacional (Niepoort, Ramos Pinto), Alentejo, Vinho Verde Alvarinho',
+      'Argentina':  'Mendoza Malbec (Catena Zapata, Achaval Ferrer), Salta Torrontes, Uco Valley',
+      'Australia':  'Barossa Shiraz (Penfolds Grange, Henschke), Clare Valley Riesling, Yarra Pinot Noir',
     };
 
     if (paese && paese !== 'Italia') {
       const esempi = ESEMPI[paese] || `vini tipici di ${paese}`;
-      const geoBlock =
-        `\n\n${'█'.repeat(46)}\n` +
-        `🔴 VINCOLO GEOGRAFICO ASSOLUTO\n` +
-        `${'█'.repeat(46)}\n` +
+      userMsg =
+        `\n\n${'█'.repeat(44)}\n` +
+        `VINCOLO GEOGRAFICO ASSOLUTO\n` +
+        `${'█'.repeat(44)}\n` +
         `PAESE: "${paese}"${regione ? `\nREGIONE: "${regione}"` : ''}\n\n` +
-        `✅ Consiglia SOLO vini di ${paese}${regione ? ` (zona ${regione})` : ''}\n` +
-        `❌ VIETATO: Barolo, Brunello, Amarone, Chianti o qualunque vino italiano\n` +
-        `❌ VIETATO: vini di qualsiasi altro paese che non sia ${paese}\n\n` +
+        `OBBLIGATORIO: consiglia SOLO vini di ${paese}${regione ? ` zona ${regione}` : ''}\n` +
+        `VIETATO: qualsiasi vino non proveniente da ${paese}\n` +
         `Esempi accettabili: ${esempi}\n` +
-        `${'█'.repeat(46)}\n`;
-
-      userMsg = geoBlock + '\n' + userMsg;
+        `${'█'.repeat(44)}\n\n` + userMsg;
     }
 
     const text = await callAI(system, userMsg, maxTokens);
@@ -170,152 +415,100 @@ app.post(['/api/groq', '/api/chat'], async (req, res) => {
 });
 
 /* ════════════════════════════════════════════
-   GET /api/articles — articoli in cache
+   ROUTE: ARTICOLI
    ════════════════════════════════════════════ */
-app.get('/api/articles', (req, res) => {
+app.get('/api/articles', (_req, res) => {
   res.json(_articles);
 });
 
-/* ════════════════════════════════════════════
-   GET /api/articles/generate — forza rigenerazione
-   ════════════════════════════════════════════ */
 app.get('/api/articles/generate', async (req, res) => {
-  if (req.query.secret !== ADMIN_SECRET) {
-    return res.status(403).json({ error: 'Accesso negato' });
-  }
+  if (req.query.secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
   try {
     const arts = await generateArticles(true);
-    res.json({ ok: true, count: arts.length });
+    res.json({ ok: true, count: arts.length, titles: arts.map(a => a.titolo_it) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-/* ════════════════════════════════════════════
-   GENERAZIONE ARTICOLI (3 lingue)
-   ════════════════════════════════════════════ */
-const IMGS = [
-  'https://images.unsplash.com/photo-1510812431401-41d2bd2722f3?w=600&q=80',
-  'https://images.unsplash.com/photo-1474722883778-792e7990302f?w=600&q=80',
-  'https://images.unsplash.com/photo-1506377247377-2a5b3b417ebb?w=600&q=80',
-  'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=600&q=80',
-  'https://images.unsplash.com/photo-1568702846914-96b305d2aaeb?w=600&q=80',
-  'https://images.unsplash.com/photo-1586370434639-0fe43b2d32e6?w=600&q=80',
-  'https://images.unsplash.com/photo-1567529684892-09290a1b2d05?w=600&q=80',
-  'https://images.unsplash.com/photo-1504279577054-acfeccf8fc52?w=600&q=80',
-];
+/* Admin: salva articolo manuale */
+app.post('/api/articles/save', async (req, res) => {
+  if (req.query.secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
+  const art = req.body;
+  if (!art || !art.id) return res.status(400).json({ error: 'Articolo non valido' });
+  /* Assicura foto corretta basata su topic */
+  if (!art.immagine) art.immagine = topicPhoto(art.categoria_it, art.titolo_it);
+  _articles = [art, ..._articles.filter(a => a.id !== art.id)];
+  console.log('[admin] Articolo salvato:', art.titolo_it || '?');
+  res.json({ ok: true, count: _articles.length });
+});
+
+/* Admin: elimina articolo */
+app.delete('/api/articles/delete/:id', (req, res) => {
+  if (req.query.secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
+  const before = _articles.length;
+  _articles = _articles.filter(a => a.id !== req.params.id);
+  if (_articles.length === before) return res.status(404).json({ error: 'Articolo non trovato' });
+  res.json({ ok: true, remaining: _articles.length });
+});
 
 /* ════════════════════════════════════════════
-   TOPICS DINAMICI — variano ogni giorno automaticamente
-   Ogni giorno l'IA sceglie argomenti diversi dal pool
+   ROUTE: CONTATTI
    ════════════════════════════════════════════ */
-function getDailyTopics(){
-  const today = new Date();
-  const d = Math.floor((today - new Date(today.getFullYear(),0,0)) / 86400000);
+app.post('/api/contact', async (req, res) => {
+  const { name = '', email = '', subject = '', message = '' } = req.body;
+  if (!name || !email || !message) return res.status(400).json({ error: 'Campi mancanti' });
 
-  const NEWS_POOL = [
-    "una notizia dal mercato mondiale dei vini pregiati (aste, prezzi, nuove denominazioni 2025-2026)",
-    "una notizia sui cambiamenti climatici e l impatto sulle vendemmie mondiali 2025-2026",
-    "una notizia su un produttore mondiale premiato nel 2025-2026 (Decanter, Wine Spectator, Wine Advocate)",
-    "le tendenze di consumo dei vini nel 2026: quali paesi emergono, quali stili crescono",
-    "una innovazione in cantina o in vigna: anfore, orange wine, biodinamica, tecniche nuove",
-    "un vino storico battuto all asta o una cantina acquistata da nuovi proprietari nel 2025-2026",
-    "le denominazioni emergenti nel mondo del vino: nuove DOC, nuove AVA, trend globali",
-  ];
+  const html = `
+    <div style="font-family:sans-serif;max-width:600px;">
+      <h2 style="color:#8B0000;">📩 Messaggio da SommelierWorld</h2>
+      <p><strong>Nome:</strong> ${name}</p>
+      <p><strong>Email:</strong> <a href="mailto:${email}">${email}</a></p>
+      <p><strong>Argomento:</strong> ${subject || '—'}</p>
+      <p><strong>Messaggio:</strong></p>
+      <blockquote style="border-left:3px solid #BF9B4A;padding-left:12px;">
+        ${message.replace(/\n/g, '<br>')}
+      </blockquote>
+    </div>`;
 
-  const TERROIR_POOL = [
-    "Mosel - ardesia blu, Riesling, Egon Muller, JJ Prum, vigneti eroici",
-    "Barolo - Piemonte, Nebbiolo, MGA storiche, Conterno, Mascarello",
-    "Champagne - creta, metodo classico, grandi maison vs recoltant-manipulant",
-    "Santorini - Assyrtiko, suolo vulcanico, alberello kouloura, Gaia Wines",
-    "Priorat - llicorella scura, Garnacha centenaria, Alvaro Palacios",
-    "Wachau - Gruner Veltliner, Riesling, Danubio, FX Pichler, Prager",
-    "Barossa Valley - Shiraz centenario, old vines, Penfolds Grange, Henschke",
-    "Marlborough - Sauvignon Blanc, Cloudy Bay, Greywacke, terroir unico",
-    "Mendoza - Malbec, Ande, Catena Zapata, vigneti ad alta quota",
-    "Borgogna - Pinot Noir, Chardonnay, grands crus, DRC, Leroy",
-    "Etna - Nerello Mascalese, contrade, lava, Cornelissen, Terre Nere",
-    "Tokaj - Furmint, aszu, botrytis, vino dei re, storia millenaria",
-    "Georgia - Kvevri, Rkatsiteli, Saperavi, vini arancioni, 8000 anni di storia",
-    "Rioja - Tempranillo, Garnacha, Muga, CVNE, Gran Reserva, terroir",
-  ];
+  try {
+    await sendEmail(ADMIN_EMAIL, `[SW] ${subject || 'Messaggio da ' + name}`, html);
+    res.json({ ok: true });
+  } catch (e) {
+    res.json({ ok: true, warn: e.message });
+  }
+});
 
-  const SOM_POOL = [
-    "la decantazione: quando e perche usarla, vini che ne beneficiano, vini che non la tollerano",
-    "l abbinamento cibo-vino: principi di concordanza e contrasto, 5 abbinamenti perfetti nel mondo",
-    "la temperatura di servizio: come cambia il vino, regole per spumanti, bianchi, rossi, dolci",
-    "la degustazione professionale: metodo AIS, come descrivere un vino, i 5 sensi applicati",
-    "lo Champagne e le bollicine mondiali: metodo classico, charmat, petillant naturel",
-    "i vini naturali, biodinamici, organici: differenze, produttori di riferimento, come riconoscerli",
-    "i vini dolci del mondo: Sauternes, TBA, Tokaj, Vin Santo, Recioto",
-  ];
-
-  const VIT_POOL = [
-    "la potatura invernale e i sistemi di allevamento nel mondo: Guyot, alberello, cordone",
-    "il cambiamento climatico in vigna: come i produttori si adattano, vitigni resistenti",
-    "la vendemmia: come si decide il momento giusto, differenze tra nord e sud del mondo",
-    "biodinamica e agricoltura biologica: principi, calendario lunare, produttori mondiali",
-    "il terroir: come suolo, clima e uomo creano il carattere unico di un vino",
-    "i vitigni autoctoni dimenticati: vitigni recuperati in Italia, Spagna, Grecia, Georgia",
-  ];
-
-  const VIG_POOL = [
-    "il Nebbiolo: Barolo, Barbaresco, Gattinara, il vitigno piu difficile d Italia",
-    "il Riesling: Mosel, Alsazia, Rheingau, Wachau - il piu longevo al mondo",
-    "il Pinot Nero: Borgogna vs Willamette vs Otago - il Santo Graal dei vitigni",
-    "il Sangiovese: famiglia di cloni, Brunello, Chianti, Montepulciano",
-    "l Assyrtiko di Santorini: minerale vulcanico, storia millenaria",
-    "il Malbec: Argentina vs Cahors - storia, stile, produttori, futuro",
-    "il Grenache/Garnacha/Cannonau: il piu coltivato al mondo, Priorat, Provenza, Sardegna",
-    "il Cabernet Sauvignon: Bordeaux, Napa, Cile, Australia - come cambia il terroir",
-    "il Shiraz/Syrah: Nord Rodano vs Barossa - stesso vitigno, mondi opposti",
-  ];
-
-  const n = NEWS_POOL[d % NEWS_POOL.length];
-  const t1 = TERROIR_POOL[d % TERROIR_POOL.length];
-  const t2 = TERROIR_POOL[(d+5) % TERROIR_POOL.length];
-  const s = SOM_POOL[(d+2) % SOM_POOL.length];
-  const v = VIT_POOL[(d+3) % VIT_POOL.length];
-  const g = VIG_POOL[(d+4) % VIG_POOL.length];
-
-  return [
-    {
-      tag: "🗞 Wine News", isNews: true,
-      it: "Scrivi una notizia attuale e curiosa (2025-2026) su: "+n+". Fatti specifici, nomi reali, numeri. 270 parole. Coinvolgente, non un comunicato stampa. Solo italiano.",
-      en: "Write a current 2025-2026 wine news about: "+n+". Specific facts, real names, numbers. 270 words. Engaging. English only.",
-      fr: "Ecris une actualite vinicole 2025-2026 sur: "+n+". Faits precis, noms reels. 270 mots. Captivante. Francais uniquement."
-    },
-    {
-      tag: "🌍 Terroir", isNews: false,
-      it: "Scrivi un articolo appassionato su: "+t1+". Suolo, clima, vitigni, produttori, curiosita rare. 270 parole. Solo italiano.",
-      en: "Write a passionate article about: "+t1+". Soil, climate, grapes, producers, rare facts. 270 words. English only.",
-      fr: "Ecris un article passionne sur: "+t1+". Sol, climat, cepages, producteurs, curiosites. 270 mots. Francais uniquement."
-    },
-    {
-      tag: "📚 Sommelier", isNews: false,
-      it: "Scrivi un articolo tecnico e pratico su: "+s+". Esempi concreti con vini e produttori reali. Utile a esperti e appassionati. 270 parole. Solo italiano.",
-      en: "Write a technical article about: "+s+". Concrete examples with real wines. Useful for experts and enthusiasts. 270 words. English only.",
-      fr: "Ecris un article technique sur: "+s+". Exemples concrets avec noms reels. 270 mots. Francais uniquement."
-    },
-    {
-      tag: "🍇 Viticoltura", isNews: false,
-      it: "Scrivi un articolo dettagliato e curioso su: "+v+". Produttori reali da tutto il mondo. Interessante, non accademico. 270 parole. Solo italiano.",
-      en: "Write a detailed article about: "+v+". Real producers from around the world. Interesting, not academic. 270 words. English only.",
-      fr: "Ecris un article detaille sur: "+v+". Producteurs reels du monde entier. 270 mots. Francais uniquement."
-    },
-    {
-      tag: "🍷 Vitigni", isNews: false,
-      it: "Scrivi un articolo appassionante sul vitigno: "+g+". Storia, caratteristiche, migliori produttori mondiali, abbinamenti, curiosita. 270 parole. Solo italiano.",
-      en: "Write an engaging article on: "+g+". History, styles, best world producers, pairings. 270 words. English only.",
-      fr: "Ecris un article captivant sur: "+g+". Histoire, styles, meilleurs producteurs mondiaux. 270 mots. Francais uniquement."
-    },
-    {
-      tag: "🌍 Curiosita Mondiale", isNews: false,
-      it: "Scrivi un articolo appassionato su: "+t2+". Dettagli insoliti, produttori emergenti, storia affascinante. 270 parole. Solo italiano.",
-      en: "Write a passionate article about: "+t2+". Unusual details, emerging producers, fascinating history. 270 words. English only.",
-      fr: "Ecris un article passionne sur: "+t2+". Details insolites, producteurs emergents. 270 mots. Francais uniquement."
-    },
-  ];
+/* ════════════════════════════════════════════
+   CRON — genera articoli ogni giorno alle 07:00 UTC
+   ════════════════════════════════════════════ */
+function startCron() {
+  function scheduleNext() {
+    const now  = new Date();
+    const next = new Date(now);
+    next.setUTCHours(7, 0, 0, 0);
+    if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
+    const delay = next - now;
+    console.log(`[cron] Prossima gen: ${next.toISOString()} (fra ${Math.round(delay / 60000)} min)`);
+    setTimeout(async () => {
+      console.log('[cron] Generazione articoli...');
+      try { await generateArticles(true); }
+      catch (e) { console.error('[cron]', e.message); }
+      scheduleNext();
+    }, delay);
+  }
+  scheduleNext();
 }
 
-const TOPICS = getDailyTopics();
+/* ════════════════════════════════════════════
+   AVVIO SERVER
+   ════════════════════════════════════════════ */
+app.listen(PORT, '0.0.0.0', async () => {
+  console.log(`\n🍷 Sommelier World Server v9.1 — porta ${PORT}`);
+  console.log(`   Groq:${GROQ_KEY ? '✓' : '✗'}  Gemini:${GEMINI_KEY ? '✓' : '✗'}  Email:${SMTP_USER ? '✓' : '✗'}`);
+  startCron();
+  if (_articles.length === 0 && (GROQ_KEY || GEMINI_KEY)) {
+    console.log('[startup] Generazione articoli iniziali...');
+    generateArticles().catch(e => console.warn('[startup]', e.message));
+  }
+});
