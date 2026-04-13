@@ -430,6 +430,17 @@ app.post(['/api/groq', '/api/chat'], async (req, res) => {
         `${'█'.repeat(44)}\n\n` + userMsg;
     }
 
+    /* Aggiunge regole AIS al system prompt se non già presenti */
+    if (!system.includes('REGOLE D')) {
+      system += '\n\n═══ REGOLE INVIOLABILI AIS ═══\n' +
+        'TANNINO + PESCE = VIETATO (sapore metallico). ' +
+        'PIATTO GRASSO → acidità o bollicine obbligatorie. ' +
+        'CARNE SUCCULENTA → tannino + alcol. ' +
+        'DESSERT → solo vino dolce. ' +
+        'SPEZIATO → vino morbido e fruttato, basso alcol. ' +
+        'Struttura risposta: ① Analisi AIS del piatto ② Vino consigliato con chimica ③ Alternativa economica ④ Temperatura/servizio ⑤ Segreto del sommelier.';
+    }
+
     const text = await callAI(system, userMsg, maxTokens);
     res.json({ text, ok: true });
 
