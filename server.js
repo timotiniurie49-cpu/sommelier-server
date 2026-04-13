@@ -143,14 +143,39 @@ function getDailyTopics() {
   const today = new Date();
   const d = Math.floor((today - new Date(today.getFullYear(), 0, 0)) / 86400000);
 
+  /* NEWS_POOL — 31 varianti = 1 mese senza ripetizioni */
   const NEWS_POOL = [
-    "notizia sul mercato mondiale dei vini pregiati 2025-2026: aste, prezzi record, nuove denominazioni",
-    "impatto del cambiamento climatico sulle vendemmie mondiali 2025-2026 con dati e produttori citati",
-    "produttore mondiale premiato nel 2025-2026 da Decanter, Wine Spectator o Wine Advocate",
-    "tendenze di consumo vini 2026: quali paesi emergono, quali stili crescono, dati Nielsen o IWSR",
-    "innovazione in cantina o vigna 2025-2026: anfore, orange wine, biodinamica, droni, AI in vigna",
-    "vino storico battuto all'asta o cantina acquisita da nuovi proprietari nel 2025-2026",
-    "denominazioni emergenti 2025-2026: nuove DOC italiane, nuove AVA americane, trend globali",
+    "mercato mondiale vini pregiati 2025-2026: aste Sothebys Christie's, prezzi record, chi compra",
+    "cambiamento climatico sulle vendemmie 2025: siccita, grandine, come i produttori rispondono",
+    "produttore mondiale premiato 2025-2026 da Decanter World Wine Awards con voti e motivazioni",
+    "tendenze consumo vini 2026: dati IWSR, paesi emergenti, stili che crescono e calano",
+    "innovazione in cantina 2025-2026: anfore georgiane, robot in vigna, AI nella vinificazione",
+    "grande cantina acquisita o fusione nel 2025-2026: chi compra chi e perche nel mercato del vino",
+    "denominazione emergente 2025-2026: nuova DOC italiana o nuova AVA americana con storia",
+    "Barolo 2020 vs 2021: confronto tra due grandi annate piemontesi, chi vince e perche",
+    "vini naturali e biodinamici 2025-2026: crescita del mercato, fiere, produttori da conoscere",
+    "turismo del vino 2026: le cantine piu visitate al mondo, enoturismo post-pandemia, dati",
+    "Champagne 2025-2026: annata, prezzi, nuove maison RM emergenti da scoprire",
+    "vino cinese nel 2026: Ningxia conquista medaglie internazionali, cosa sta succedendo",
+    "Prosecco vs Champagne: guerre legali, mercati, chi cresce di piu nel 2026",
+    "Orange wine mainstream nel 2026: da nicchia a fenomeno globale, produttori chiave",
+    "vini della Georgia 2025-2026: Kvevri conquista l'Europa, esportazioni, produttori",
+    "prezzi del Barolo e Brunello nel 2026: analisi mercato secondario, en primeur",
+    "Napa Valley 2024 vintage report: dopo gli incendi, una vendemmia eccezionale",
+    "vini greci 2025-2026: Assyrtiko e Xinomavro conquistano le carte mondiali",
+    "mercato spumanti italiani 2026: Franciacorta cresce, Trento DOC si consolida",
+    "sostenibilita in vigna 2026: certificazioni, carbon footprint, chi guida la rivoluzione verde",
+    "vini arancio 2026: da Collio a Georgia, mappa mondiale del skin contact",
+    "investire in vino 2026: Liv-ex, rendimenti, quali etichette acquistare come investimento",
+    "Riesling tedesco 2025: vendemmia fredda, acidita record, prezzi ancora accessibili",
+    "Malbec argentino conquista Europa: nuovi mercati, Uco Valley emergente, annata 2024",
+    "vino giapponese 2025-2026: Koshu e Muscat Bailey A a Londra, il Giappone vitivinicolo",
+    "Bordeaux 2023 en primeur: prezzi crollano, i migliori chateaux da comprare",
+    "Pinot Nero oltre Borgogna: Oregon Willamette, Otago, Ahr, chi fa meglio nel 2026",
+    "vino senz'alcol 2026: il mercato esplode, quali sono buoni veramente, produttori pionieri",
+    "Rioja divide: tradizionalisti vs modernisti, la guerra dei vini spagnoli nel 2026",
+    "cannabis wine e infusi: legale in Europa, chi produce, quanto costa, dove comprare",
+    "donne nel vino 2026: produttrici, cantiniere, sommelieres che stanno cambiando il settore",
   ];
 
   const TERROIR_POOL = [
