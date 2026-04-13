@@ -121,17 +121,30 @@ const PHOTO_MAP = {
 
 function topicPhoto(tag, title) {
   const t = ((tag || '') + ' ' + (title || '')).toLowerCase();
-  if (t.match(/champagne|bollicin|spumant|prosecco|cava/)) return PHOTO_MAP.champagne;
-  if (t.match(/sommelier|degust|abbinament|calice/))       return PHOTO_MAP.sommelier;
-  if (t.match(/vendemmia|harvest|raccolt/))                return PHOTO_MAP.harvest;
-  if (t.match(/uva|grapes|grappol/))                       return PHOTO_MAP.grapes;
-  if (t.match(/cantina|barrique|barrel|botti/))            return PHOTO_MAP.cellar;
-  if (t.match(/rosso|nebbiolo|sangiovese|barolo|malbec|shiraz|grenach/)) return PHOTO_MAP.wine_red;
-  if (t.match(/bianco|riesling|chardonnay|sauvignon|blanc/))            return PHOTO_MAP.wine_white;
-  if (t.match(/notizia|mercato|prezzi|asta|award|premio/)) return PHOTO_MAP.bottles;
-  if (t.match(/produttor|winery|azienda|cantina/))         return PHOTO_MAP.winery;
-  if (t.match(/etna|vulcan|santorini|canari/))             return PHOTO_MAP.vineyard_sun;
-  return PHOTO_MAP.vineyard_hill;
+  let query = 'wine,vineyard';
+  if (t.match(/barolo|nebbiolo|langhe|piemonte/))     query = 'barolo,vineyard,piedmont,wine';
+  else if (t.match(/champagne|bollicin|spumant/))     query = 'champagne,bubbles,sparkling,wine';
+  else if (t.match(/mosel|mosella|riesling.*german/)) query = 'mosel,riesling,germany,vineyard';
+  else if (t.match(/etna|vulcan|lava/))               query = 'etna,volcano,vineyard,sicily';
+  else if (t.match(/borgogna|bourgogne|pinot.*noir/)) query = 'burgundy,pinot,vineyard,france';
+  else if (t.match(/santorini|assyrtiko|grecia/))     query = 'santorini,vineyard,greece,wine';
+  else if (t.match(/bordeaux|cabernet|merlot/))       query = 'bordeaux,chateau,vineyard,wine';
+  else if (t.match(/toscana|sangiovese|chianti|brunello/)) query = 'tuscany,vineyard,wine,italy';
+  else if (t.match(/rioja|tempranillo|spagna/))       query = 'rioja,vineyard,spain,wine';
+  else if (t.match(/sommelier|degust|abbinament/))    query = 'sommelier,wine,tasting,glass';
+  else if (t.match(/vendemmia|harvest|raccolt/))      query = 'harvest,grape,picking,vineyard';
+  else if (t.match(/cantina|barrique|barrel|botti/))  query = 'wine,cellar,barrel,aging';
+  else if (t.match(/viticolt|potatur|vigneto/))       query = 'vineyard,vine,pruning,wine';
+  else if (t.match(/notizia|mercato|prezzi|asta/))    query = 'wine,bottle,cellar,collection';
+  else if (t.match(/rosso|red.*wine|malbec|shiraz/))  query = 'red,wine,glass,vineyard';
+  else if (t.match(/bianco|white.*wine|riesling/))    query = 'white,wine,glass,vineyard';
+  else if (t.match(/provenza|rose|rosato/))           query = 'provence,rose,wine,vineyard';
+  else if (t.match(/tokaj|furmint/))                  query = 'tokaj,hungary,wine,vineyard';
+  else if (t.match(/georgia|kvevri/))                 query = 'georgia,wine,clay,kvevri';
+  const seed = title
+    ? Math.abs(title.split('').reduce((a,c) => a + c.charCodeAt(0), 0))
+    : Math.floor(Date.now() / 86400000);
+  return 'https://source.unsplash.com/700x400/?' + query + '&seed=' + seed;
 }
 
 /* ════════════════════════════════════════════
@@ -345,7 +358,7 @@ async function generateArticles(force = false) {
         testo_fr:     txt_fr.trim(),
         autore:       'Sommelier World AI',
         data:         new Date().toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' }),
-        immagine:     PHOTO_MAP[T.photo] || PHOTO_MAP.vineyard_hill,
+        immagine:     topicPhoto(T.tag, cleanTit(tit_it)),
       };
 
       arts.push(art);
