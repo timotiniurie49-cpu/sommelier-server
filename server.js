@@ -479,7 +479,23 @@ app.get('/api/articles', (_req, res) => {
 });
 
 app.get('/api/articles/generate', async (req, res) => {
-  if (req.query.secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
+  const provided = req.query.secret || req.headers['x-admin-secret'] || '';
+  if (provided !== ADMIN_SECRET) {
+    console.log('[auth] Secret fornito:', provided, '| Atteso:', ADMIN_SECRET);
+    return res.status(403).json({ error: 'Accesso negato', hint: 'Controlla ADMIN_SECRET in Railway ENV' });
+  }
+  try {
+    const arts = await generateArticles(true);
+    res.json({ ok: true, count: arts.length, titles: arts.map(a => a.titolo_it) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* Admin: genera articoli via POST (dal pannello admin) */
+app.post('/api/articles/generate', async (req, res) => {
+  const secret = req.body.secret || req.query.secret || '';
+  if (secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
   try {
     const arts = await generateArticles(true);
     res.json({ ok: true, count: arts.length, titles: arts.map(a => a.titolo_it) });
@@ -490,7 +506,8 @@ app.get('/api/articles/generate', async (req, res) => {
 
 /* Admin: salva articolo manuale */
 app.post('/api/articles/save', async (req, res) => {
-  if (req.query.secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
+  const _s1 = req.query.secret || req.body.secret || '';
+  if (_s1 !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
   const art = req.body;
   if (!art || !art.id) return res.status(400).json({ error: 'Articolo non valido' });
   /* Assicura foto corretta basata su topic */
@@ -502,7 +519,8 @@ app.post('/api/articles/save', async (req, res) => {
 
 /* Admin: elimina articolo */
 app.delete('/api/articles/delete/:id', (req, res) => {
-  if (req.query.secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
+  const _s2 = req.query.secret || '';
+  if (_s2 !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
   const before = _articles.length;
   _articles = _articles.filter(a => a.id !== req.params.id);
   if (_articles.length === before) return res.status(404).json({ error: 'Articolo non trovato' });
