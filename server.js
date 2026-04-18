@@ -121,30 +121,17 @@ const PHOTO_MAP = {
 
 function topicPhoto(tag, title) {
   const t = ((tag || '') + ' ' + (title || '')).toLowerCase();
-  let query = 'wine,vineyard';
-  if (t.match(/barolo|nebbiolo|langhe|piemonte/))     query = 'barolo,vineyard,piedmont,wine';
-  else if (t.match(/champagne|bollicin|spumant/))     query = 'champagne,bubbles,sparkling,wine';
-  else if (t.match(/mosel|mosella|riesling.*german/)) query = 'mosel,riesling,germany,vineyard';
-  else if (t.match(/etna|vulcan|lava/))               query = 'etna,volcano,vineyard,sicily';
-  else if (t.match(/borgogna|bourgogne|pinot.*noir/)) query = 'burgundy,pinot,vineyard,france';
-  else if (t.match(/santorini|assyrtiko|grecia/))     query = 'santorini,vineyard,greece,wine';
-  else if (t.match(/bordeaux|cabernet|merlot/))       query = 'bordeaux,chateau,vineyard,wine';
-  else if (t.match(/toscana|sangiovese|chianti|brunello/)) query = 'tuscany,vineyard,wine,italy';
-  else if (t.match(/rioja|tempranillo|spagna/))       query = 'rioja,vineyard,spain,wine';
-  else if (t.match(/sommelier|degust|abbinament/))    query = 'sommelier,wine,tasting,glass';
-  else if (t.match(/vendemmia|harvest|raccolt/))      query = 'harvest,grape,picking,vineyard';
-  else if (t.match(/cantina|barrique|barrel|botti/))  query = 'wine,cellar,barrel,aging';
-  else if (t.match(/viticolt|potatur|vigneto/))       query = 'vineyard,vine,pruning,wine';
-  else if (t.match(/notizia|mercato|prezzi|asta/))    query = 'wine,bottle,cellar,collection';
-  else if (t.match(/rosso|red.*wine|malbec|shiraz/))  query = 'red,wine,glass,vineyard';
-  else if (t.match(/bianco|white.*wine|riesling/))    query = 'white,wine,glass,vineyard';
-  else if (t.match(/provenza|rose|rosato/))           query = 'provence,rose,wine,vineyard';
-  else if (t.match(/tokaj|furmint/))                  query = 'tokaj,hungary,wine,vineyard';
-  else if (t.match(/georgia|kvevri/))                 query = 'georgia,wine,clay,kvevri';
-  const seed = title
-    ? Math.abs(title.split('').reduce((a,c) => a + c.charCodeAt(0), 0))
-    : Math.floor(Date.now() / 86400000);
-  return 'https://source.unsplash.com/700x400/?' + query + '&seed=' + seed;
+  if (t.match(/champagne|bollicin|spumant|prosecco|cava/)) return PHOTO_MAP.champagne;
+  if (t.match(/sommelier|degust|abbinament|calice/))       return PHOTO_MAP.sommelier;
+  if (t.match(/vendemmia|harvest|raccolt/))                return PHOTO_MAP.harvest;
+  if (t.match(/uva|grapes|grappol/))                       return PHOTO_MAP.grapes;
+  if (t.match(/cantina|barrique|barrel|botti/))            return PHOTO_MAP.cellar;
+  if (t.match(/rosso|nebbiolo|sangiovese|barolo|malbec|shiraz|grenach/)) return PHOTO_MAP.wine_red;
+  if (t.match(/bianco|riesling|chardonnay|sauvignon|blanc/))            return PHOTO_MAP.wine_white;
+  if (t.match(/notizia|mercato|prezzi|asta|award|premio/)) return PHOTO_MAP.bottles;
+  if (t.match(/produttor|winery|azienda|cantina/))         return PHOTO_MAP.winery;
+  if (t.match(/etna|vulcan|santorini|canari/))             return PHOTO_MAP.vineyard_sun;
+  return PHOTO_MAP.vineyard_hill;
 }
 
 /* ════════════════════════════════════════════
@@ -242,15 +229,12 @@ function getDailyTopics() {
     "vitigni aromatici: Gewurztraminer Alsazia, Moscato Piemonte, Torrontes Argentina, Malvasia Sicilia",
   ];
 
-  /* Seed composito: combina giorno + settimana per >360 combinazioni/anno */
-  const w  = Math.floor(d / 7);  /* settimana dell'anno (0-52) */
-  const m  = new Date().getMonth(); /* mese (0-11) */
-  const n  = NEWS_POOL[(d + w) % NEWS_POOL.length];
-  const t1 = TERROIR_POOL[(d + m) % TERROIR_POOL.length];
-  const t2 = TERROIR_POOL[(d + w + 6) % TERROIR_POOL.length];
-  const s  = SOM_POOL[(d + w + 2) % SOM_POOL.length];
-  const v  = VIT_POOL[(d * 3 + m) % VIT_POOL.length];
-  const g  = VIG_POOL[(d + w + m + 4) % VIG_POOL.length];
+  const n  = NEWS_POOL[d % NEWS_POOL.length];
+  const t1 = TERROIR_POOL[d % TERROIR_POOL.length];
+  const t2 = TERROIR_POOL[(d + 6) % TERROIR_POOL.length];
+  const s  = SOM_POOL[(d + 2) % SOM_POOL.length];
+  const v  = VIT_POOL[(d + 3) % VIT_POOL.length];
+  const g  = VIG_POOL[(d + 4) % VIG_POOL.length];
 
   return [
     {
@@ -295,17 +279,14 @@ function getDailyTopics() {
 /* ════════════════════════════════════════════
    GENERAZIONE ARTICOLI
    ════════════════════════════════════════════ */
-const DISCLAIMER = '\n\n---\n*Articolo generato a scopo puramente informativo e didattico. Non costituisce pubblicità né testata giornalistica registrata. I nomi dei produttori sono citati per diritto di cronaca. Dati tecnici indicativi basati su analisi medie di settore.*';
+const DISCLAIMER = '\n\n---\n*Articolo generato a scopo puramente informativo e didattico. Non costituisce pubblicità né testata giornalistica. I produttori sono citati per diritto di cronaca.*';
 
 const SYS_ART = 'Sei un esperto giornalista enogastronomico internazionale, stile Decanter e Wine Spectator. ' +
   'Scrivi con precisione, passione e concretezza. ' +
-  'Regole OBBLIGATORIE: ' +
-  '(1) Usa nomi reali di produttori e denominazioni solo per diritto di cronaca informativa — mai toni pubblicitari o lodi eccessive per una singola cantina; ' +
-  '(2) Se citi dati tecnici (pH, zuccheri, resa, gradazione) aggiungi: "Dati indicativi basati su analisi medie di settore"; ' +
-  '(3) Includi almeno 3 dettagli tecnici concreti (suolo, altitudine, vitigno, stile); ' +
-  '(4) Racconta come una storia equilibrata, non un volantino promozionale; ' +
-  '(5) Ogni articolo deve includere un fatto sorprendente che pochi conoscono; ' +
-  '(6) Non lasciare intendere che Sommelier World sia partner ufficiale di nessun marchio.';
+  'Regole OBBLIGATORIE: (1) usa sempre nomi reali di produttori, denominazioni, annate specifiche; ' +
+  '(2) includi almeno 3 dettagli tecnici concreti (es. suolo, altitudine, resa/ettaro, gradazione); ' +
+  '(3) racconta come una storia che cattura, non elencare fatti; ' +
+  '(4) ogni articolo deve includere un fatto sorprendente che pochi conoscono.';
 
 const SYS_TIT = 'Sei un editor di una rivista di vino. ' +
   'Rispondi SOLO con il titolo (massimo 8 parole, nessuna virgolette, nessuna punteggiatura finale). ' +
@@ -366,7 +347,7 @@ async function generateArticles(force = false) {
         testo_fr:     txt_fr.trim() + DISCLAIMER,
         autore:       'Sommelier World AI',
         data:         new Date().toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' }),
-        immagine:     topicPhoto(T.tag, cleanTit(tit_it)),
+        immagine:     PHOTO_MAP[T.photo] || PHOTO_MAP.vineyard_hill,
       };
 
       arts.push(art);
@@ -479,23 +460,7 @@ app.get('/api/articles', (_req, res) => {
 });
 
 app.get('/api/articles/generate', async (req, res) => {
-  const provided = req.query.secret || req.headers['x-admin-secret'] || '';
-  if (provided !== ADMIN_SECRET) {
-    console.log('[auth] Secret fornito:', provided, '| Atteso:', ADMIN_SECRET);
-    return res.status(403).json({ error: 'Accesso negato', hint: 'Controlla ADMIN_SECRET in Railway ENV' });
-  }
-  try {
-    const arts = await generateArticles(true);
-    res.json({ ok: true, count: arts.length, titles: arts.map(a => a.titolo_it) });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-/* Admin: genera articoli via POST (dal pannello admin) */
-app.post('/api/articles/generate', async (req, res) => {
-  const secret = req.body.secret || req.query.secret || '';
-  if (secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
+  if (req.query.secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
   try {
     const arts = await generateArticles(true);
     res.json({ ok: true, count: arts.length, titles: arts.map(a => a.titolo_it) });
@@ -506,8 +471,7 @@ app.post('/api/articles/generate', async (req, res) => {
 
 /* Admin: salva articolo manuale */
 app.post('/api/articles/save', async (req, res) => {
-  const _s1 = req.query.secret || req.body.secret || '';
-  if (_s1 !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
+  if (req.query.secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
   const art = req.body;
   if (!art || !art.id) return res.status(400).json({ error: 'Articolo non valido' });
   /* Assicura foto corretta basata su topic */
@@ -519,8 +483,7 @@ app.post('/api/articles/save', async (req, res) => {
 
 /* Admin: elimina articolo */
 app.delete('/api/articles/delete/:id', (req, res) => {
-  const _s2 = req.query.secret || '';
-  if (_s2 !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
+  if (req.query.secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Accesso negato' });
   const before = _articles.length;
   _articles = _articles.filter(a => a.id !== req.params.id);
   if (_articles.length === before) return res.status(404).json({ error: 'Articolo non trovato' });
