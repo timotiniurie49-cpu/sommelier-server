@@ -242,12 +242,15 @@ function getDailyTopics() {
     "vitigni aromatici: Gewurztraminer Alsazia, Moscato Piemonte, Torrontes Argentina, Malvasia Sicilia",
   ];
 
-  const n  = NEWS_POOL[d % NEWS_POOL.length];
-  const t1 = TERROIR_POOL[d % TERROIR_POOL.length];
-  const t2 = TERROIR_POOL[(d + 6) % TERROIR_POOL.length];
-  const s  = SOM_POOL[(d + 2) % SOM_POOL.length];
-  const v  = VIT_POOL[(d + 3) % VIT_POOL.length];
-  const g  = VIG_POOL[(d + 4) % VIG_POOL.length];
+  /* Seed composito: combina giorno + settimana per >360 combinazioni/anno */
+  const w  = Math.floor(d / 7);  /* settimana dell'anno (0-52) */
+  const m  = new Date().getMonth(); /* mese (0-11) */
+  const n  = NEWS_POOL[(d + w) % NEWS_POOL.length];
+  const t1 = TERROIR_POOL[(d + m) % TERROIR_POOL.length];
+  const t2 = TERROIR_POOL[(d + w + 6) % TERROIR_POOL.length];
+  const s  = SOM_POOL[(d + w + 2) % SOM_POOL.length];
+  const v  = VIT_POOL[(d * 3 + m) % VIT_POOL.length];
+  const g  = VIG_POOL[(d + w + m + 4) % VIG_POOL.length];
 
   return [
     {
@@ -292,12 +295,17 @@ function getDailyTopics() {
 /* ════════════════════════════════════════════
    GENERAZIONE ARTICOLI
    ════════════════════════════════════════════ */
+const DISCLAIMER = '\n\n---\n*Articolo generato a scopo puramente informativo e didattico. Non costituisce pubblicità né testata giornalistica registrata. I nomi dei produttori sono citati per diritto di cronaca. Dati tecnici indicativi basati su analisi medie di settore.*';
+
 const SYS_ART = 'Sei un esperto giornalista enogastronomico internazionale, stile Decanter e Wine Spectator. ' +
   'Scrivi con precisione, passione e concretezza. ' +
-  'Regole OBBLIGATORIE: (1) usa sempre nomi reali di produttori, denominazioni, annate specifiche; ' +
-  '(2) includi almeno 3 dettagli tecnici concreti (es. suolo, altitudine, resa/ettaro, gradazione); ' +
-  '(3) racconta come una storia che cattura, non elencare fatti; ' +
-  '(4) ogni articolo deve includere un fatto sorprendente che pochi conoscono.';
+  'Regole OBBLIGATORIE: ' +
+  '(1) Usa nomi reali di produttori e denominazioni solo per diritto di cronaca informativa — mai toni pubblicitari o lodi eccessive per una singola cantina; ' +
+  '(2) Se citi dati tecnici (pH, zuccheri, resa, gradazione) aggiungi: "Dati indicativi basati su analisi medie di settore"; ' +
+  '(3) Includi almeno 3 dettagli tecnici concreti (suolo, altitudine, vitigno, stile); ' +
+  '(4) Racconta come una storia equilibrata, non un volantino promozionale; ' +
+  '(5) Ogni articolo deve includere un fatto sorprendente che pochi conoscono; ' +
+  '(6) Non lasciare intendere che Sommelier World sia partner ufficiale di nessun marchio.';
 
 const SYS_TIT = 'Sei un editor di una rivista di vino. ' +
   'Rispondi SOLO con il titolo (massimo 8 parole, nessuna virgolette, nessuna punteggiatura finale). ' +
@@ -353,9 +361,9 @@ async function generateArticles(force = false) {
         titolo_it:    cleanTit(tit_it),
         titolo_en:    cleanTit(tit_en),
         titolo_fr:    cleanTit(tit_fr),
-        testo_it:     txt_it.trim(),
-        testo_en:     txt_en.trim(),
-        testo_fr:     txt_fr.trim(),
+        testo_it:     txt_it.trim() + DISCLAIMER,
+        testo_en:     txt_en.trim() + DISCLAIMER,
+        testo_fr:     txt_fr.trim() + DISCLAIMER,
         autore:       'Sommelier World AI',
         data:         new Date().toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' }),
         immagine:     topicPhoto(T.tag, cleanTit(tit_it)),
